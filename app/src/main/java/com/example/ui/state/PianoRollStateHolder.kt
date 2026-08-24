@@ -71,25 +71,14 @@ class PianoRollStateHolder(
 
     private fun createUiState(p: com.example.synth.domain.ProjectState): PianoRollUiState {
         val track = p.tracks.firstOrNull { it.id == p.selectedTrackId } ?: p.tracks.firstOrNull()
-        val clip = track?.arrangementClips?.firstOrNull() ?: track?.sessionClips?.firstOrNull()
+        val arrClip = track?.arrangementClips?.firstOrNull()
+        val sessClip = track?.sessionClips?.firstOrNull()
 
         return PianoRollUiState(
             activeTrackId = track?.id,
-            activeClipId = clip?.id,
-            notes = clip?.let {
-                when (it) {
-                    is ArrangementClip -> it.notes
-                    is com.example.synth.domain.SessionClip -> it.notes
-                    else -> emptyList()
-                }
-            } ?: emptyList(),
-            drumSteps = clip?.let {
-                when (it) {
-                    is ArrangementClip -> it.drumSteps
-                    is com.example.synth.domain.SessionClip -> it.drumSteps
-                    else -> emptyMap()
-                }
-            } ?: emptyMap(),
+            activeClipId = arrClip?.id ?: sessClip?.id,
+            notes = arrClip?.notes ?: sessClip?.notes ?: emptyList(),
+            drumSteps = arrClip?.drumSteps ?: sessClip?.drumSteps ?: emptyMap(),
             playheadBeat = p.playheadBeat,
             isPlaying = p.isPlaying,
             keyRoot = p.keyRoot,

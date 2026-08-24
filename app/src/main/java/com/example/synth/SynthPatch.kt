@@ -48,6 +48,8 @@ data class SynthPatch(
     val masterVolume: Float = 0.8f
 ) {
     companion object {
+        val DEFAULT: SynthPatch get() = PRESETS.first()
+
         val PRESETS = listOf(
             SynthPatch(
                 name = "Fat Sub-Bass",

@@ -213,6 +213,16 @@ object ProjectSerializer {
                         params.put("releaseMs", module.releaseMs.toDouble())
                         params.put("makeupGainDb", module.makeupGainDb.toDouble())
                     }
+                    is MultibandCompressorModule -> {
+                        params.put("lowThresholdDb", module.lowThresholdDb.toDouble())
+                        params.put("lowRatio", module.lowRatio.toDouble())
+                        params.put("lowMidThresholdDb", module.lowMidThresholdDb.toDouble())
+                        params.put("lowMidRatio", module.lowMidRatio.toDouble())
+                        params.put("highMidThresholdDb", module.highMidThresholdDb.toDouble())
+                        params.put("highMidRatio", module.highMidRatio.toDouble())
+                        params.put("highThresholdDb", module.highThresholdDb.toDouble())
+                        params.put("highRatio", module.highRatio.toDouble())
+                    }
                 }
                 put("params", params)
             }
