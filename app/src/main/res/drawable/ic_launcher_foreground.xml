@@ -1,0 +1,102 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+
+    <!-- Synthesizer Chassis Frame -->
+    <path
+        android:fillColor="#FF181C28"
+        android:strokeColor="#FF00E5FF"
+        android:strokeWidth="1.5"
+        android:pathData="M28,26 L80,26 A4,4 0 0,1 84,30 L84,78 A4,4 0 0,1 80,82 L28,82 A4,4 0 0,1 24,78 L24,30 A4,4 0 0,1 28,26 Z" />
+
+    <!-- Top Oscilloscope Screen Screen Area -->
+    <path
+        android:fillColor="#FF0E111A"
+        android:strokeColor="#3300E5FF"
+        android:strokeWidth="1"
+        android:pathData="M28,30 L80,30 A2,2 0 0,1 82,32 L82,48 A2,2 0 0,1 80,50 L28,50 A2,2 0 0,1 26,48 L26,32 A2,2 0 0,1 28,30 Z" />
+
+    <!-- Sine / Analog Waveform on Screen -->
+    <path
+        android:strokeColor="#FF00E5FF"
+        android:strokeWidth="1.8"
+        android:fillColor="#00000000"
+        android:pathData="M28,40 C34,40 36,33 42,33 C48,33 50,47 56,47 C62,47 64,33 70,33 C76,33 78,40 80,40" />
+
+    <!-- Synth Control Knobs Row -->
+    <!-- Knob 1 (Cyan) -->
+    <path
+        android:fillColor="#FF232A3E"
+        android:strokeColor="#FF00E5FF"
+        android:strokeWidth="1"
+        android:pathData="M34,57 A3.5,3.5 0 1,1 34,57.1 Z" />
+    <path
+        android:strokeColor="#FF00E5FF"
+        android:strokeWidth="1"
+        android:pathData="M34,57 L36,54" />
+
+    <!-- Knob 2 (Pink) -->
+    <path
+        android:fillColor="#FF232A3E"
+        android:strokeColor="#FFFF007F"
+        android:strokeWidth="1"
+        android:pathData="M46,57 A3.5,3.5 0 1,1 46,57.1 Z" />
+    <path
+        android:strokeColor="#FFFF007F"
+        android:strokeWidth="1"
+        android:pathData="M46,57 L48,54" />
+
+    <!-- Knob 3 (Yellow) -->
+    <path
+        android:fillColor="#FF232A3E"
+        android:strokeColor="#FFFFE600"
+        android:strokeWidth="1"
+        android:pathData="M58,57 A3.5,3.5 0 1,1 58,57.1 Z" />
+    <path
+        android:strokeColor="#FFFFE600"
+        android:strokeWidth="1"
+        android:pathData="M58,57 L60,54" />
+
+    <!-- Knob 4 (Green) -->
+    <path
+        android:fillColor="#FF232A3E"
+        android:strokeColor="#FF00FF66"
+        android:strokeWidth="1"
+        android:pathData="M70,57 A3.5,3.5 0 1,1 70,57.1 Z" />
+    <path
+        android:strokeColor="#FF00FF66"
+        android:strokeWidth="1"
+        android:pathData="M70,57 L72,54" />
+
+    <!-- Mini Keyboard Strip at the bottom -->
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M26,66 L82,66 L82,78 A2,2 0 0,1 80,80 L28,80 A2,2 0 0,1 26,78 Z" />
+
+    <!-- Key Separators -->
+    <path
+        android:strokeColor="#FF181C28"
+        android:strokeWidth="0.8"
+        android:pathData="M34,66 L34,80 M42,66 L42,80 M50,66 L50,80 M58,66 L58,80 M66,66 L66,80 M74,66 L74,80" />
+
+    <!-- Black Keys -->
+    <path
+        android:fillColor="#FF121622"
+        android:pathData="M31,66 L33,66 L33,74 L31,74 Z" />
+    <path
+        android:fillColor="#FF121622"
+        android:pathData="M39,66 L41,66 L41,74 L39,74 Z" />
+    <path
+        android:fillColor="#FF121622"
+        android:pathData="M55,66 L57,66 L57,74 L55,74 Z" />
+    <path
+        android:fillColor="#FF121622"
+        android:pathData="M63,66 L65,66 L65,74 L63,74 Z" />
+    <path
+        android:fillColor="#FF121622"
+        android:pathData="M71,66 L73,66 L73,74 L71,74 Z" />
+
+</vector>
