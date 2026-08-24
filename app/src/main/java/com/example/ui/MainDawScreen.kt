@@ -19,6 +19,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.example.synth.SynthEngineBridge
 import com.example.synth.domain.DawTab
 import com.example.synth.domain.ProjectAction
 import com.example.synth.domain.ProjectStore
@@ -38,6 +39,14 @@ fun MainDawScreen(
     modifier: Modifier = Modifier
 ) {
     val projectState by store.state.collectAsState()
+
+    // Real-Time Audio Engine Bridge
+    val engineBridge = remember(store) { SynthEngineBridge(store = store) }
+    DisposableEffect(engineBridge) {
+        onDispose {
+            engineBridge.release()
+        }
+    }
 
     // Instantiate modular state holders
     val transportStateHolder = remember(store) { TransportStateHolder(store) }
