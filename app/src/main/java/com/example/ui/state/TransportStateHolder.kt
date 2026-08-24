@@ -3,8 +3,12 @@ package com.example.ui.state
 import com.example.synth.domain.MusicalScale
 import com.example.synth.domain.ProjectAction
 import com.example.synth.domain.ProjectStore
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.launch
 
 data class TransportUiState(
     val isPlaying: Boolean,
@@ -21,16 +25,17 @@ data class TransportUiState(
     val timecodeFormatted: String
 )
 
-class TransportStateHolder(private val store: ProjectStore) {
-    val state: StateFlow<TransportUiState> = kotlinx.coroutines.flow.MutableStateFlow(
-        createUiState(store.state.value)
-    ).apply {
-        // Observe store changes
-        kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.Main.immediate).let { scope ->
-            scope.launchWhenCreated {
-                store.state.collect { projectState ->
-                    this@apply.value = createUiState(projectState)
-                }
+class TransportStateHolder(
+    private val store: ProjectStore,
+    private val scope: CoroutineScope = CoroutineScope(Dispatchers.Main.immediate)
+) {
+    private val _state = MutableStateFlow(createUiState(store.state.value))
+    val state: StateFlow<TransportUiState> = _state.asStateFlow()
+
+    init {
+        scope.launch {
+            store.state.collect { projectState ->
+                _state.value = createUiState(projectState)
             }
         }
     }
@@ -69,9 +74,4 @@ class TransportStateHolder(private val store: ProjectStore) {
             )
         }
     }
-}
-
-@Suppress("DEPRECATION")
-private fun kotlinx.coroutines.CoroutineScope.launchWhenCreated(block: suspend () -> Unit) {
-    launch(kotlinx.coroutines.Dispatchers.Default) { block() }
 }

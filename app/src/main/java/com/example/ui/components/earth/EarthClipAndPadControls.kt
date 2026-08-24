@@ -249,8 +249,8 @@ fun ParametricEqGraph(
         for (i in 0..points) {
             val x = (i.toFloat() / points) * size.width
             val normX = i.toFloat() / points
-            // Bell curve bump around mid-high frequencies
-            val bell = kotlin.math.exp(-kotlin.math.pow((normX - 0.6) / 0.15, 2.0)).toFloat() * 30.dp.toPx()
+            val diff = (normX - 0.6) / 0.15
+            val bell = kotlin.math.exp(-(diff * diff)).toFloat() * 30.dp.toPx()
             val y = zeroDbY - bell
             path.lineTo(x, y)
         }

@@ -30,6 +30,7 @@ fun MacroCutoffKnob(
     modifier: Modifier = Modifier,
     displayValue: String = "${(value * 100).toInt()}%",
     modDepth: Float = 0.0f,
+    accentColor: Color = EarthColorTokens.EarthAmber,
     onValueChange: (Float) -> Unit
 ) {
     var dragAccumulator by remember { mutableStateOf(value) }
@@ -86,12 +87,12 @@ fun MacroCutoffKnob(
                     )
                 }
 
-                // Active Amber LED Arc
+                // Active LED Arc
                 val activeSweep = value * sweepMax
                 if (activeSweep > 0.5f) {
                     drawArc(
                         brush = Brush.sweepGradient(
-                            listOf(EarthColorTokens.EarthAmber, EarthColorTokens.AutumnMapleAmber)
+                            listOf(accentColor, EarthColorTokens.AutumnMapleAmber)
                         ),
                         startAngle = startAngle,
                         sweepAngle = activeSweep,
