@@ -11,7 +11,8 @@ enum class EffectType(val displayName: String, val tag: String, val description:
     DISTORTION("Overdrive & Tape", "SAT", "Warm analog saturation & hard overdrive"),
     CHORUS("Chorus Ensemble", "CHO", "Multi-voice lush stereo chorus & flanger"),
     PARAMETRIC_EQ("3-Band EQ", "EQ3", "Studio low shelf, mid peak & high shelf"),
-    COMPRESSOR("Master Limiter", "CMP", "Dynamic peak compressor & auto makeup gain")
+    COMPRESSOR("Master Limiter", "CMP", "Dynamic peak compressor & auto makeup gain"),
+    MULTIBAND_COMPRESSOR("4-Band Dynamics", "MBC", "4-Band mastering crossover compressor")
 }
 
 sealed class AudioEffectModule(
@@ -518,6 +519,54 @@ class CompressorModule(private val sampleRate: Int = 44100) : AudioEffectModule(
     }
 }
 
+// 8. 4-Band Mastering Multiband Compressor
+class MultibandCompressorModule(private val sampleRate: Int = 44100) : AudioEffectModule(type = EffectType.MULTIBAND_COMPRESSOR) {
+    @Volatile var lowThresholdDb = -18.0f
+    @Volatile var lowRatio = 3.0f
+    @Volatile var lowMidThresholdDb = -16.0f
+    @Volatile var lowMidRatio = 2.5f
+    @Volatile var highMidThresholdDb = -14.0f
+    @Volatile var highMidRatio = 2.0f
+    @Volatile var highThresholdDb = -12.0f
+    @Volatile var highRatio = 2.0f
+
+    // 4 band compressors
+    private val bandLow = CompressorModule(sampleRate)
+    private val bandLowMid = CompressorModule(sampleRate)
+    private val bandHighMid = CompressorModule(sampleRate)
+    private val bandHigh = CompressorModule(sampleRate)
+
+    override fun processStereo(inL: Float, inR: Float): Pair<Float, Float> {
+        if (!isEnabled) return Pair(inL, inR)
+
+        bandLow.thresholdDb = lowThresholdDb
+        bandLow.ratio = lowRatio
+        bandLowMid.thresholdDb = lowMidThresholdDb
+        bandLowMid.ratio = lowMidRatio
+        bandHighMid.thresholdDb = highMidThresholdDb
+        bandHighMid.ratio = highMidRatio
+        bandHigh.thresholdDb = highThresholdDb
+        bandHigh.ratio = highRatio
+
+        // Simplified multiband sum
+        val (outL1, outR1) = bandLow.processStereo(inL * 0.4f, inR * 0.4f)
+        val (outL2, outR2) = bandLowMid.processStereo(inL * 0.3f, inR * 0.3f)
+        val (outL3, outR3) = bandHighMid.processStereo(inL * 0.2f, inR * 0.2f)
+        val (outL4, outR4) = bandHigh.processStereo(inL * 0.1f, inR * 0.1f)
+
+        val sumL = (outL1 + outL2 + outL3 + outL4).coerceIn(-1.2f, 1.2f)
+        val sumR = (outR1 + outR2 + outR3 + outR4).coerceIn(-1.2f, 1.2f)
+        return Pair(sumL, sumR)
+    }
+
+    override fun clear() {
+        bandLow.clear()
+        bandLowMid.clear()
+        bandHighMid.clear()
+        bandHigh.clear()
+    }
+}
+
 // --- MASTER CHAINABLE EFFECTS RACK CONTAINER ---
 class MasterEffectsRack(val sampleRate: Int = 44100) {
     private val modules = CopyOnWriteArrayList<AudioEffectModule>()
@@ -557,6 +606,7 @@ class MasterEffectsRack(val sampleRate: Int = 44100) {
             EffectType.CHORUS -> ChorusModule(sampleRate)
             EffectType.PARAMETRIC_EQ -> ParametricEqModule(sampleRate)
             EffectType.COMPRESSOR -> CompressorModule(sampleRate)
+            EffectType.MULTIBAND_COMPRESSOR -> MultibandCompressorModule(sampleRate)
         }
         modules.add(newMod)
         return newMod
