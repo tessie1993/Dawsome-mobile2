@@ -1,10 +1,13 @@
+# Mobile DAW Architecture & Class Diagram Map
+
+This document is the **living map of the codebase**, maintained and kept continuously up to date as each component and class is implemented.
+
 ```mermaid
 classDiagram
     %% ==========================================
     %% INHERITANCE / HIERARCHY
     %% ==========================================
     ComponentActivity <|-- MainActivity
-    AndroidViewModel <|-- SynthViewModel
     RoomDatabase <|-- DawDatabase
 
     AudioEffectModule <|-- ReverbModule
@@ -16,45 +19,364 @@ classDiagram
     AudioEffectModule <|-- CompressorModule
 
     %% ==========================================
-    %% APP ENTRY POINT
+    %% APP ENTRY POINT & SCREENS (EARTH.DESIGN)
     %% ==========================================
     class MainActivity {
         +onCreate(savedInstanceState: Bundle)
     }
 
+    class MainDawScreen {
+        <<composable>>
+    }
+
+    class ArrangerScreen {
+        <<composable>>
+    }
+
+    class SessionViewScreen {
+        <<composable>>
+    }
+
+    class MixerScreen {
+        <<composable>>
+    }
+
+    class PianoRollScreen {
+        <<composable>>
+    }
+
+    class ModularSynthScreen {
+        <<composable>>
+    }
+
+    class SamplerDrumLabScreen {
+        <<composable>>
+    }
+
+    class SoundBrowserScreen {
+        <<composable>>
+    }
+
+    class MasteringSuiteScreen {
+        <<composable>>
+    }
+
     %% ==========================================
-    %% PRESENTATION LAYER (VIEWMODEL)
+    %% EARTH.DESIGN PRO-AUDIO COMPONENTS
     %% ==========================================
-    class SynthViewModel {
-        -SynthEngine _engine
-        -DawDatabase database
-        -ProjectRepository projectRepository
-        +StateFlow~List~ProjectEntity~~ allSavedProjects
-        +StateFlow~DawTab~ currentTab
-        +StateFlow~Boolean~ isPlaying
-        +StateFlow~Float~ bpm
-        +StateFlow~List~MidiNote~~ leadNotes
-        +StateFlow~List~MidiNote~~ bassNotes
-        +StateFlow~List~SessionScene~~ scenes
-        +StateFlow~List~ArrangementTrack~~ arrangementTracks
-        +loadProject(index: Int)
-        +saveProject(name: String)
+    class EarthTransportBar {
+        <<composable>>
+    }
+
+    class MacroCutoffKnob {
+        <<composable>>
+    }
+
+    class BiDirectionalPanKnob {
+        <<composable>>
+    }
+
+    class MicroEncoder {
+        <<composable>>
+    }
+
+    class PrecisionCrystalFader {
+        <<composable>>
+    }
+
+    class StereoLedLevelMeter {
+        <<composable>>
+    }
+
+    class SoloMuteArmToggles {
+        <<composable>>
+    }
+
+    class ClipLauncherTile {
+        <<composable>>
+    }
+
+    class VelocityDrumPad {
+        <<composable>>
+    }
+
+    class InteractiveWaveformCanvas {
+        <<composable>>
+    }
+
+    class ParametricEqGraph {
+        <<composable>>
+    }
+
+    class AdsrEnvelopeGraph {
+        <<composable>>
+    }
+
+    %% ==========================================
+    %% UNIDIRECTIONAL DATA FLOW (UDF) STORE
+    %% ==========================================
+    class ProjectStore {
+        -MutableStateFlow~ProjectState~ _state
+        +StateFlow~ProjectState~ state
+        -ArrayDeque~ProjectState~ undoStack
+        -ArrayDeque~ProjectState~ redoStack
+        +dispatch(ProjectAction action)
+        +undo()
+        +redo()
+    }
+
+    class ProjectState {
+        <<data class>>
+        +String id
+        +String name
+        +Float bpm
+        +Int timeSigNum
+        +Int timeSigDen
+        +Int keyRoot
+        +MusicalScale scale
+        +List~TrackModel~ tracks
+        +List~SessionScene~ scenes
+        +Float masterVolumeDb
+        +Boolean isPlaying
+        +Boolean isRecording
+        +Boolean isLooping
+        +Float playheadBeat
+        +String selectedTrackId
+        +DawTab activeTab
+    }
+
+    class ProjectAction {
+        <<sealed interface>>
+    }
+
+    %% ==========================================
+    %% MODULAR UI STATE HOLDERS
+    %% ==========================================
+    class TransportStateHolder {
+        +StateFlow~TransportUiState~ state
+        +play()
+        +stop()
         +togglePlay()
-        +noteOn(note: Int)
-        +noteOff(note: Int)
+        +toggleRecord()
+        +toggleLoop()
+        +setBpm(bpm: Float)
+        +seekToBeat(beat: Float)
+        +setLoopRegion(start: Float, end: Float)
+    }
+
+    class ArrangementStateHolder {
+        +StateFlow~ArrangementUiState~ state
+        +selectTrack(trackId: String)
+        +moveClip(clipId: String, newStartBeat: Float)
+        +resizeClip(clipId: String, newLengthBeats: Float)
+        +deleteClip(clipId: String)
+        +addClip(clip: ArrangementClip)
+    }
+
+    class SessionStateHolder {
+        +StateFlow~SessionUiState~ state
+        +triggerClip(trackId: String, slotIndex: Int)
         +triggerScene(sceneIndex: Int)
-        +triggerClip(track: SessionTrackType, clipIndex: Int)
+        +returnTrackToArrangement(trackId: String)
+        +returnAllToArrangement()
+    }
+
+    class MixerStateHolder {
+        +StateFlow~MixerUiState~ state
+        +selectTrack(trackId: String)
+        +setTrackVolume(trackId: String, volumeDb: Float)
+        +setTrackPan(trackId: String, pan: Float)
+        +toggleMute(trackId: String)
+        +toggleSolo(trackId: String)
+        +toggleArm(trackId: String)
+        +setSend(trackId: String, sendIndex: Int, level: Float)
+        +setMasterVolume(volumeDb: Float)
+    }
+
+    class DeviceRackStateHolder {
+        +StateFlow~DeviceRackUiState~ state
+        +addDevice(trackId: String, type: DeviceType)
+        +removeDevice(trackId: String, deviceId: String)
+        +toggleDevice(trackId: String, deviceId: String)
+        +setParam(trackId: String, deviceId: String, paramName: String, value: Float)
+    }
+
+    class PianoRollStateHolder {
+        +StateFlow~PianoRollUiState~ state
+        +addNote(note: MidiNote)
+        +deleteNote(noteId: String)
+        +quantizeNotes(gridBeat: Float)
+        +toggleDrumStep(pad: DrumPadType, stepBeat: Float)
+    }
+
+    class SoundBrowserStateHolder {
+        +StateFlow~BrowserUiState~ state
+        +selectCategory(cat: BrowserCategory)
+        +search(query: String)
+        +toggleTag(tag: String)
+    }
+
+    class MasteringStateHolder {
+        +StateFlow~MasteringUiState~ state
+        +setMasterVolume(volumeDb: Float)
+        +setLimiterCeiling(ceilingDb: Float)
+        +toggleLimiter()
+        +toggleMultiband()
+    }
+
+    %% ==========================================
+    %% DESIGN SYSTEM (EARTH.DESIGN)
+    %% ==========================================
+    class EarthColorTokens {
+        <<object>>
+        +Color BgObsidianDeep
+        +Color GlassEspresso
+        +Color EarthAmber
+        +Color AutumnTerracotta
+        +Color NatureEmerald
+        +Color NatureMossSage
+    }
+
+    class EarthGlassTokens {
+        <<object>>
+        +GlassElevation Level1Dock
+        +GlassElevation Level2Panel
+        +GlassElevation Level3Device
+        +GlassElevation Level4Modal
+    }
+
+    class EarthTypography {
+        <<data class>>
+        +TextStyle displayTime
+        +TextStyle bpmValue
+        +TextStyle trackTitle
+        +TextStyle sectionLabel
+        +TextStyle paramLabel
+        +TextStyle paramValue
+    }
+
+    %% ==========================================
+    %% CORE DOMAIN MODELS
+    %% ==========================================
+    class TrackModel {
+        +String id
+        +String name
+        +TrackType type
+        +String colorHex
+        +Float volumeDb
+        +Float pan
+        +Boolean isMuted
+        +Boolean isSoloed
+        +Boolean isArmed
+        +List~DeviceModel~ devices
+        +List~ArrangementClip~ arrangementClips
+        +List~SessionClip~ sessionClips
+    }
+
+    class TrackType {
+        <<enumeration>>
+        MIDI
+        AUDIO
+        DRUM
+        RETURN
+        MASTER
+    }
+
+    class ArrangementClip {
+        +String id
+        +String name
+        +String trackId
+        +Float startBeat
+        +Float lengthBeats
+        +List~MidiNote~ notes
+        +Map~DrumPadType, List~Float~~ drumSteps
+        +String audioFilePath
+    }
+
+    class SessionClip {
+        +String id
+        +String name
+        +String trackId
+        +Int slotIndex
+        +List~MidiNote~ notes
+        +Map~DrumPadType, List~Float~~ drumSteps
+        +Boolean isPlaying
+    }
+
+    class SessionScene {
+        +String id
+        +String name
+        +Int index
+        +Float bpm
+    }
+
+    class MidiNote {
+        +String id
+        +Int pitch
+        +Float startBeat
+        +Float lengthBeats
+        +Float velocity
+        +Float releaseVelocity
+        +Float probability
+    }
+
+    class DrumPadType {
+        <<enumeration>>
+        KICK
+        SNARE
+        CLAP
+        HIHAT_CLOSED
+        HIHAT_OPEN
+        TOM_LOW
+        TOM_MID
+        TOM_HIGH
+        CRASH
+        RIDE
+        PERC_1
+        PERC_2
+        SUB_BOOM
+        SHAKER
+        COWBELL
+        RIMSHOT
+    }
+
+    class DeviceModel {
+        +String id
+        +DeviceType type
+        +String name
+        +Boolean isEnabled
+        +Map~String, Float~ params
+    }
+
+    class DeviceType {
+        <<enumeration>>
+        SUBTRACTIVE_SYNTH
+        WAVETABLE_SYNTH
+        FM_SYNTH
+        SAMPLER
+        ELECTRIC_PIANO
+        STRING_PAD
+        DRUM_RACK
+        PARAMETRIC_EQ
+        COMPRESSOR
+        REVERB
+        DELAY
+        DISTORTION
+        CHORUS
+        LIMITER
     }
 
     class DawTab {
         <<enumeration>>
         SESSION
         ARRANGER
+        MIXER
+        PIANO_ROLL
         SYNTH
         SAMPLER
-        PIANO_ROLL
         DRUMS
-        MIXER
+        BROWSER
+        MASTERING
     }
 
     %% ==========================================
@@ -68,588 +390,58 @@ classDiagram
         +SamplerInstrument sampler
         +ElectricPianoSynth electricPiano
         +StringPadSynth stringPad
-        +InstrumentType activeInstrument
         +start()
         +stop()
         +noteOn(noteNumber: Int)
         +noteOff(noteNumber: Int)
-        +bassNoteOn(noteNumber: Int)
-        +bassNoteOff(noteNumber: Int)
-        +triggerDrum(type: DrumType, velocity: Float)
-        +panic()
-    }
-
-    class Waveform {
-        <<enumeration>>
-        SINE
-        SQUARE
-        TRIANGLE
-        SAWTOOTH
-        NOISE
-    }
-
-    class LfoDestination {
-        <<enumeration>>
-        NONE
-        VCO_PITCH
-        VCF_CUTOFF
-        VCA_VOLUME
-        PAN
-    }
-
-    class FilterType {
-        <<enumeration>>
-        LOW_PASS
-        HIGH_PASS
-        BAND_PASS
-    }
-
-    class InstrumentType {
-        <<enumeration>>
-        ANALOG_SUB
-        WAVETABLE
-        FM_OPERATOR
-        SAMPLER
-        ELECTRIC_PIANO
-        STRING_PAD
-    }
-
-    class SynthPatch {
-        +String name
-        +Waveform vco1Waveform
-        +Waveform vco2Waveform
-        +Waveform lfoWaveform
-        +LfoDestination lfoDestination
-        +FilterType filterType
-        +applyToEngine(engine: SynthEngine)
     }
 
     %% ==========================================
-    %% INSTRUMENTS & SYNTH GENERATORS
+    %% DEPENDENCIES & RELATIONSHIPS
     %% ==========================================
-    class WavetableSynth {
-        +WavetableBank bank
-        +Float tablePosition
-        +WavetableWarpMode warpMode
-        +renderSample(frequency: Float) Float
-        +getWaveformVisual(resolution: Int) FloatArray
-    }
+    MainActivity ..> MainDawScreen
+    MainDawScreen ..> ProjectStore
+    MainDawScreen *-- EarthTransportBar
+    MainDawScreen *-- ArrangerScreen
+    MainDawScreen *-- SessionViewScreen
+    MainDawScreen *-- MixerScreen
+    MainDawScreen *-- PianoRollScreen
+    MainDawScreen *-- ModularSynthScreen
+    MainDawScreen *-- SamplerDrumLabScreen
+    MainDawScreen *-- SoundBrowserScreen
+    MainDawScreen *-- MasteringSuiteScreen
 
-    class WavetableBank {
-        <<enumeration>>
-        MODERN_ANALOG
-        CYBER_FORMANT
-        METALLIC_GLASS
-        CHIPTUNE_8BIT
-        ORGAN_HARMONICS
-    }
+    ArrangerScreen *-- InteractiveWaveformCanvas
+    ArrangerScreen *-- SoloMuteArmToggles
+    SessionViewScreen *-- ClipLauncherTile
+    MixerScreen *-- PrecisionCrystalFader
+    MixerScreen *-- StereoLedLevelMeter
+    MixerScreen *-- BiDirectionalPanKnob
+    MixerScreen *-- MicroEncoder
+    PianoRollScreen *-- SoloMuteArmToggles
+    ModularSynthScreen *-- MacroCutoffKnob
+    ModularSynthScreen *-- ParametricEqGraph
+    ModularSynthScreen *-- AdsrEnvelopeGraph
+    SamplerDrumLabScreen *-- VelocityDrumPad
 
-    class WavetableWarpMode {
-        <<enumeration>>
-        NONE
-        PWM
-        SYNC
-        BEND
-        FM
-    }
+    ProjectStore *-- ProjectState
+    ProjectStore ..> ProjectAction
+    ProjectState *-- TrackModel
+    ProjectState *-- SessionScene
+    TrackModel *-- DeviceModel
+    TrackModel *-- ArrangementClip
+    TrackModel *-- SessionClip
+    ArrangementClip *-- MidiNote
+    SessionClip *-- MidiNote
 
-    class FmOperatorSynth {
-        +FmAlgorithm algorithm
-        +FmOperatorState opA
-        +FmOperatorState opB
-        +FmOperatorState opC
-        +FmOperatorState opD
-        +renderSample(baseFreq: Float, envGate: Float) Float
-    }
+    TransportStateHolder --> ProjectStore
+    ArrangementStateHolder --> ProjectStore
+    SessionStateHolder --> ProjectStore
+    MixerStateHolder --> ProjectStore
+    DeviceRackStateHolder --> ProjectStore
+    PianoRollStateHolder --> ProjectStore
+    SoundBrowserStateHolder --> ProjectStore
+    MasteringStateHolder --> ProjectStore
 
-    class FmAlgorithm {
-        <<enumeration>>
-        CASCADE_STACK
-        DUAL_STACK
-        PARALLEL_MOD
-        ALL_PARALLEL
-    }
-
-    class FmOperatorState {
-        +Float ratio
-        +Float fineTune
-        +Float level
-        +Float feedback
-    }
-
-    class SamplerInstrument {
-        +SamplerPlaybackMode mode
-        +Int selectedPresetIndex
-        +Float startPoint
-        +Float endPoint
-        +FloatArray sampleBuffer
-        +triggerNoteOn(pitch: Int, velocity: Float)
-        +triggerNoteOff(pitch: Int)
-        +renderSample() Float
-        +loadPreset(index: Int)
-    }
-
-    class SamplerPlaybackMode {
-        <<enumeration>>
-        CLASSIC
-        ONE_SHOT
-        SLICING
-    }
-
-    class SamplePreset {
-        +String id
-        +String name
-        +Int rootPitch
-        +SampleGeneratorType generatorType
-    }
-
-    class SampleGeneratorType {
-        <<enumeration>>
-        SUB_808
-        RHODES_CHORD
-        ACOUSTIC_SNARE
-        VOCAL_CHANT
-        GRAND_PIANO
-        CYBER_PLUCK
-        AMEN_BREAK
-        VINYL_CRACKLE
-    }
-
-    class ElectricPianoSynth {
-        +Float tineDecay
-        +Float bellHarmonic
-        +Float tremoloRate
-        +renderSample(baseFreq: Float, envGate: Float) Float
-    }
-
-    class StringPadSynth {
-        +Float chorusDepth
-        +Float ensembleSpeed
-        +renderSample(baseFreq: Float, envGate: Float) Float
-    }
-
-    class DrumEngine {
-        +Map~DrumType, DrumVoice~ voices
-        +trigger(type: DrumType, velocity: Float)
-        +render(sampleRate: Int) Float
-        +stopAll()
-    }
-
-    class DrumVoice {
-        +DrumType type
-        +Boolean isTriggered
-        +Float velocity
-        +trigger(vel: Float)
-        +renderSample(sampleRate: Int) Float
-    }
-
-    class DrumType {
-        <<enumeration>>
-        KICK
-        SNARE
-        HIHAT_CLOSED
-        HIHAT_OPEN
-        CLAP
-        TOM
-    }
-
-    %% ==========================================
-    %% DSP AUDIO EFFECTS
-    %% ==========================================
-    class MasterEffectsRack {
-        -List~AudioEffectModule~ modules
-        +getModules() List~AudioEffectModule~
-        +addModule(type: EffectType) AudioEffectModule
-        +removeModule(id: String)
-        +moveModule(fromIndex: Int, toIndex: Int)
-        +process(inL: Float, inR: Float) Pair~Float, Float~
-    }
-
-    class AudioEffectModule {
-        <<abstract>>
-        +String id
-        +EffectType type
-        +Boolean isEnabled
-        +processStereo(inL: Float, inR: Float)* Pair~Float, Float~
-        +clear()*
-    }
-
-    class EffectType {
-        <<enumeration>>
-        REVERB
-        DELAY
-        FILTER
-        DISTORTION
-        CHORUS
-        PARAMETRIC_EQ
-        COMPRESSOR
-    }
-
-    class ReverbModule {
-        +Float roomSize
-        +Float damping
-        +Float preDelayMs
-        +Float mix
-        +processStereo(inL: Float, inR: Float) Pair~Float, Float~
-    }
-
-    class DelayModule {
-        +Float timeMs
-        +Float feedback
-        +Float mix
-        +Boolean pingPong
-        +processStereo(inL: Float, inR: Float) Pair~Float, Float~
-    }
-
-    class FilterModule {
-        +FilterType filterType
-        +Float cutoffHz
-        +Float resonance
-        +processStereo(inL: Float, inR: Float) Pair~Float, Float~
-    }
-
-    class DistortionModule {
-        +Float drive
-        +Float tone
-        +SaturationMode mode
-        +processStereo(inL: Float, inR: Float) Pair~Float, Float~
-    }
-
-    class SaturationMode {
-        <<enumeration>>
-        TAPE
-        TUBE
-        HARD_CLIP
-    }
-
-    class ChorusModule {
-        +Float rateHz
-        +Float depth
-        +Float feedback
-        +processStereo(inL: Float, inR: Float) Pair~Float, Float~
-    }
-
-    class ParametricEqModule {
-        +Float lowGainDb
-        +Float midGainDb
-        +Float highGainDb
-        +processStereo(inL: Float, inR: Float) Pair~Float, Float~
-    }
-
-    class CompressorModule {
-        +Float thresholdDb
-        +Float ratio
-        +Float makeupGainDb
-        +processStereo(inL: Float, inR: Float) Pair~Float, Float~
-    }
-
-    %% ==========================================
-    %% DAW DOMAIN MODELS
-    %% ==========================================
-    class MidiNote {
-        +String id
-        +Int pitch
-        +Float startBeat
-        +Float lengthBeats
-        +Float velocity
-    }
-
-    class AutomationParameter {
-        <<enumeration>>
-        VOLUME
-        PAN
-        FILTER_CUTOFF
-        FILTER_RESONANCE
-        LFO_RATE
-        REVERB_SEND
-        DELAY_SEND
-        DRIVE_DISTORTION
-        CHORUS_MIX
-        FM_DEPTH
-        WAVETABLE_POS
-        SAMPLER_START
-        SAMPLER_PITCH
-        +formatValue(normalized: Float) String
-        +toActualValue(normalized: Float) Float
-        +toNormalizedValue(actual: Float) Float
-    }
-
-    class AutomationPoint {
-        +Float beat
-        +Float normalizedValue
-    }
-
-    class AutomationLane {
-        +AutomationParameter parameter
-        +Boolean isEnabled
-        +List~AutomationPoint~ points
-        +getValueAtBeat(beat: Float) Float
-    }
-
-    class MusicalScale {
-        <<enumeration>>
-        CHROMATIC
-        MAJOR
-        NATURAL_MINOR
-        DORIAN
-        PENTATONIC_MAJOR
-        PENTATONIC_MINOR
-        BLUES
-        HIRAJOSHI
-        ARABIC
-    }
-
-    class SessionTrackType {
-        <<enumeration>>
-        LEAD
-        BASS
-        DRUMS
-    }
-
-    class SessionClip {
-        +String id
-        +String name
-        +SessionTrackType trackType
-        +List~MidiNote~ leadNotes
-        +List~MidiNote~ bassNotes
-        +Map~DrumType, List~Float~~ drumGrid
-    }
-
-    class SessionScene {
-        +String id
-        +String name
-        +Float bpm
-        +Map~SessionTrackType, SessionClip~ clips
-    }
-
-    class ArrangementClip {
-        +String id
-        +String name
-        +String trackId
-        +Float startBar
-        +Float lengthBars
-        +List~MidiNote~ leadNotes
-        +List~MidiNote~ bassNotes
-        +Map~DrumType, List~Float~~ drumGrid
-    }
-
-    class ArrangementTrack {
-        +String id
-        +String name
-        +SessionTrackType trackType
-        +String groupId
-        +List~ArrangementClip~ clips
-        +Map~AutomationParameter, AutomationLane~ automationLanes
-    }
-
-    class TrackGroup {
-        +String id
-        +String name
-        +List~String~ trackIds
-    }
-
-    class MacroControl {
-        +Int index
-        +String name
-        +Float value
-        +String targetParam
-    }
-
-    class MacroRack {
-        +String id
-        +String name
-        +Boolean isEnabled
-        +List~MacroControl~ macros
-    }
-
-    class LfoDevice {
-        +String id
-        +Boolean isEnabled
-        +Waveform waveform
-        +Float rateHz
-        +Float depth
-        +String target
-    }
-
-    class BrowserCategory {
-        <<enumeration>>
-        SOUNDS
-        DRUMS
-        INSTRUMENTS
-        AUDIO_FX
-        MIDI_FX
-        SAMPLES_LOOPS
-        USER_LIBRARY
-    }
-
-    class BrowserSampleItem {
-        +String id
-        +String name
-        +BrowserCategory category
-        +SamplePreviewType previewType
-        +SessionTrackType trackTypeTarget
-    }
-
-    class SamplePreviewType {
-        <<enumeration>>
-        DRUM_HIT
-        SYNTH_CHORD
-        BASS_SLAP
-        MELODIC_LOOP
-        DRUM_LOOP
-        FX_SWEEP
-    }
-
-    class ProjectSong {
-        +String name
-        +String genre
-        +Float bpm
-        +SynthPatch patch
-        +List~MidiNote~ leadNotes
-        +List~MidiNote~ bassNotes
-        +Map~DrumType, List~Float~~ drumGrid
-    }
-
-    class WavWriter {
-        <<object>>
-        +createWavFile(file: File, pcmData: ShortArray, sampleRate: Int, channels: Int)
-    }
-
-    %% ==========================================
-    %% DATA LAYER & PERSISTENCE
-    %% ==========================================
-    class DawDatabase {
-        <<abstract>>
-        +projectDao()* ProjectDao
-        +getDatabase(context: Context)$ DawDatabase
-    }
-
-    class ProjectDao {
-        <<interface>>
-        +getAllProjects() Flow~List~ProjectEntity~~
-        +getProjectById(id: Long) ProjectEntity
-        +insertProject(project: ProjectEntity) Long
-        +updateProject(project: ProjectEntity)
-        +deleteProjectById(id: Long)
-        +getProjectCount() Int
-    }
-
-    class ProjectEntity {
-        +Long id
-        +String name
-        +String genre
-        +Float bpm
-        +Int keyRoot
-        +String scaleName
-        +Long lastModified
-        +String projectDataJson
-    }
-
-    class ProjectRepository {
-        -ProjectDao projectDao
-        +Flow~List~ProjectEntity~~ allProjects
-        +getProjectById(id: Long) ProjectEntity
-        +saveProject(project: ProjectEntity) Long
-        +insertProject(project: ProjectEntity) Long
-        +updateProject(project: ProjectEntity)
-        +deleteProjectById(id: Long)
-        +getProjectCount() Int
-    }
-
-    class ProjectSerializer {
-        <<object>>
-        +serializeStateToJson(...) String
-        +deserializeStateFromJson(jsonStr: String) DeserializedDawState
-    }
-
-    %% ==========================================
-    %% DEPENDENCIES & ASSOCIATIONS
-    %% ==========================================
-    MainActivity ..> SynthViewModel
-
-    SynthViewModel *-- SynthEngine
-    SynthViewModel *-- ProjectRepository
-    SynthViewModel ..> DawTab
-    SynthViewModel o-- SessionScene
-    SynthViewModel o-- ArrangementTrack
-    SynthViewModel o-- TrackGroup
-    SynthViewModel o-- MacroRack
-    SynthViewModel o-- LfoDevice
-    SynthViewModel ..> ProjectSerializer
-
-    SynthEngine *-- DrumEngine
     SynthEngine *-- MasterEffectsRack
-    SynthEngine *-- WavetableSynth
-    SynthEngine *-- FmOperatorSynth
-    SynthEngine *-- SamplerInstrument
-    SynthEngine *-- ElectricPianoSynth
-    SynthEngine *-- StringPadSynth
-    SynthEngine ..> Waveform
-    SynthEngine ..> LfoDestination
-    SynthEngine ..> FilterType
-    SynthEngine ..> InstrumentType
-    SynthEngine ..> WavWriter
-
-    DrumEngine *-- DrumVoice
-    DrumVoice --> DrumType
-
-    MasterEffectsRack *-- AudioEffectModule
-    MasterEffectsRack ..> EffectType
-
-    FilterModule --> FilterType
-    DistortionModule --> SaturationMode
-
-    WavetableSynth --> WavetableBank
-    WavetableSynth --> WavetableWarpMode
-
-    FmOperatorSynth --> FmAlgorithm
-    FmOperatorSynth *-- FmOperatorState
-
-    SamplerInstrument --> SamplerPlaybackMode
-    SamplerInstrument o-- SamplePreset
-    SamplePreset --> SampleGeneratorType
-
-    SynthPatch --> Waveform
-    SynthPatch --> LfoDestination
-    SynthPatch --> FilterType
-    SynthPatch ..> SynthEngine
-
-    AutomationLane *-- AutomationPoint
-    AutomationLane --> AutomationParameter
-
-    SessionClip o-- MidiNote
-    SessionClip --> SessionTrackType
-    SessionClip --> DrumType
-
-    SessionScene *-- SessionClip
-
-    ArrangementClip o-- MidiNote
-    ArrangementClip --> DrumType
-
-    ArrangementTrack *-- ArrangementClip
-    ArrangementTrack *-- AutomationLane
-    ArrangementTrack --> SessionTrackType
-
-    MacroRack *-- MacroControl
-    LfoDevice --> Waveform
-
-    BrowserSampleItem --> BrowserCategory
-    BrowserSampleItem --> SamplePreviewType
-    BrowserSampleItem --> SessionTrackType
-
-    ProjectSong *-- SynthPatch
-    ProjectSong o-- MidiNote
-    ProjectSong --> DrumType
-
-    DawDatabase ..> ProjectDao
-    ProjectDao ..> ProjectEntity
-    ProjectRepository --> ProjectDao
-    ProjectRepository ..> ProjectEntity
-    ProjectSerializer ..> SynthPatch
-    ProjectSerializer ..> MidiNote
-    ProjectSerializer ..> AutomationLane
-    ProjectSerializer ..> AudioEffectModule
-    ProjectSerializer ..> SessionScene
-    ProjectSerializer ..> ArrangementTrack
-    ProjectSerializer ..> TrackGroup
 ```

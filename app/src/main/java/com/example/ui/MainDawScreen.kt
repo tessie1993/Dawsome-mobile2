@@ -7,106 +7,139 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.CheckCircle
-import androidx.compose.material3.*
+import androidx.compose.material3.Text
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.example.synth.DawTab
-import com.example.synth.SynthViewModel
-import com.example.ui.components.AbletonTransportBar
-import com.example.ui.components.SaveProjectDialog
-import com.example.ui.screens.ArrangerScreen
-import com.example.ui.screens.PianoRollScreen
-import com.example.ui.screens.SynthWorkspaceScreen
-import com.example.ui.theme.PulseGridActive
-import com.example.ui.theme.PulseGridBg
-import com.example.ui.theme.PulseGridBorder
-import com.example.ui.theme.PulseGridHeader
-import com.example.ui.theme.PulseGridPanel
-import com.example.ui.theme.PulseGridTextPrimary
+import com.example.synth.domain.DawTab
+import com.example.synth.domain.ProjectAction
+import com.example.synth.domain.ProjectStore
+import com.example.ui.components.earth.EarthTransportBar
+import com.example.ui.screens.earth.*
+import com.example.ui.state.*
+import com.example.ui.theme.earth.EarthColorTokens
+import com.example.ui.theme.earth.EarthTheme
+import com.example.ui.theme.earth.earthGlass
 
+/**
+ * Main Integrated DAW Workspace (Earth.Design).
+ */
 @Composable
 fun MainDawScreen(
-    viewModel: SynthViewModel,
+    store: ProjectStore = remember { ProjectStore() },
     modifier: Modifier = Modifier
 ) {
-    val currentTab by viewModel.currentTab.collectAsState()
-    val isSaveDialogOpen by viewModel.isSaveDialogOpen.collectAsState()
-    val statusToast by viewModel.statusToast.collectAsState()
+    val projectState by store.state.collectAsState()
 
-    Box(modifier = modifier.fillMaxSize().background(PulseGridBg)) {
-        Column(modifier = Modifier.fillMaxSize()) {
-            // --- TOP BAR ---
-            Box(modifier = Modifier.fillMaxWidth().background(PulseGridHeader).border(1.dp, PulseGridBorder)) {
-                AbletonTransportBar(viewModel = viewModel)
-            }
+    // Instantiate modular state holders
+    val transportStateHolder = remember(store) { TransportStateHolder(store) }
+    val arrangementStateHolder = remember(store) { ArrangementStateHolder(store) }
+    val sessionStateHolder = remember(store) { SessionStateHolder(store) }
+    val mixerStateHolder = remember(store) { MixerStateHolder(store) }
+    val deviceRackStateHolder = remember(store) { DeviceRackStateHolder(store) }
+    val pianoRollStateHolder = remember(store) { PianoRollStateHolder(store) }
+    val browserStateHolder = remember(store) { SoundBrowserStateHolder(store) }
+    val masteringStateHolder = remember(store) { MasteringStateHolder(store) }
 
-            // --- MAIN WORKSPACE ---
-            Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
-                AnimatedContent(
-                    targetState = currentTab,
-                    transitionSpec = {
-                        fadeIn(animationSpec = tween(120)) togetherWith fadeOut(animationSpec = tween(120))
-                    },
-                    label = "PulseGridWorkspaceTransition"
-                ) { tab ->
-                    when (tab) {
-                        DawTab.PIANO_ROLL -> PianoRollScreen(viewModel = viewModel)
-                        DawTab.SYNTH -> SynthWorkspaceScreen(viewModel = viewModel)
-                        else -> ArrangerScreen(viewModel = viewModel) // ArrangerScreen acts as the primary "Main" view
-                    }
+    Column(
+        modifier = modifier
+            .fillMaxSize()
+            .background(EarthColorTokens.BgObsidianDeep)
+            .statusBarsPadding()
+            .navigationBarsPadding()
+    ) {
+        // --- 1. GLOBAL TRANSPORT HEADER ---
+        EarthTransportBar(
+            transportStateHolder = transportStateHolder,
+            onUndo = { store.undo() },
+            onRedo = { store.redo() }
+        )
+
+        // --- 2. ACTIVE VIEWPORT WORKSPACE ---
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .weight(1f)
+        ) {
+            AnimatedContent(
+                targetState = projectState.activeTab,
+                transitionSpec = {
+                    fadeIn(animationSpec = tween(140)) togetherWith fadeOut(animationSpec = tween(140))
+                },
+                label = "EarthWorkspaceTransition"
+            ) { tab ->
+                when (tab) {
+                    DawTab.SESSION -> SessionViewScreen(sessionStateHolder = sessionStateHolder)
+                    DawTab.ARRANGER -> ArrangerScreen(
+                        arrangementStateHolder = arrangementStateHolder,
+                        mixerStateHolder = mixerStateHolder
+                    )
+                    DawTab.MIXER -> MixerScreen(mixerStateHolder = mixerStateHolder)
+                    DawTab.PIANO_ROLL -> PianoRollScreen(pianoRollStateHolder = pianoRollStateHolder)
+                    DawTab.SYNTH -> ModularSynthScreen(deviceRackStateHolder = deviceRackStateHolder)
+                    DawTab.SAMPLER, DawTab.DRUMS -> SamplerDrumLabScreen(deviceRackStateHolder = deviceRackStateHolder)
+                    DawTab.BROWSER -> SoundBrowserScreen(browserStateHolder = browserStateHolder)
+                    DawTab.MASTERING -> MasteringSuiteScreen(masteringStateHolder = masteringStateHolder)
                 }
             }
         }
 
-        // Save Project Dialog
-        if (isSaveDialogOpen) {
-            SaveProjectDialog(
-                viewModel = viewModel,
-                onDismiss = { viewModel.closeSaveDialog() }
-            )
-        }
+        // --- 3. FLOATING CRYSTAL DOCK NAVIGATION BAR ---
+        EarthNavigationDock(
+            activeTab = projectState.activeTab,
+            onTabSelected = { store.dispatch(ProjectAction.SelectTab(it)) }
+        )
+    }
+}
 
-        // Status Toast Notification
-        if (statusToast != null) {
+@Composable
+private fun EarthNavigationDock(
+    activeTab: DawTab,
+    onTabSelected: (DawTab) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val scrollState = rememberScrollState()
+
+    Row(
+        modifier = modifier
+            .fillMaxWidth()
+            .height(42.dp)
+            .earthGlass(shape = RoundedCornerShape(0.dp), baseColor = EarthColorTokens.GlassEspresso)
+            .horizontalScroll(scrollState)
+            .padding(horizontal = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(4.dp)
+    ) {
+        DawTab.entries.forEach { tab ->
+            val isSelected = tab == activeTab
+
             Box(
                 modifier = Modifier
-                    .fillMaxSize()
-                    .padding(bottom = 64.dp),
-                contentAlignment = Alignment.BottomCenter
+                    .clip(RoundedCornerShape(4.dp))
+                    .background(if (isSelected) EarthColorTokens.EarthAmber else EarthColorTokens.GlassSurface)
+                    .border(
+                        0.5.dp,
+                        if (isSelected) EarthColorTokens.EarthAmber else EarthColorTokens.GlassBorderSubtle,
+                        RoundedCornerShape(4.dp)
+                    )
+                    .clickable { onTabSelected(tab) }
+                    .padding(horizontal = 10.dp, vertical = 6.dp),
+                contentAlignment = Alignment.Center
             ) {
-                Surface(
-                    shape = RoundedCornerShape(8.dp),
-                    color = PulseGridPanel,
-                    border = androidx.compose.foundation.BorderStroke(1.dp, PulseGridBorder),
-                    shadowElevation = 8.dp
-                ) {
-                    Row(
-                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.CheckCircle,
-                            contentDescription = null,
-                            tint = PulseGridActive,
-                            modifier = Modifier.size(16.dp)
-                        )
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text(
-                            text = statusToast!!,
-                            fontSize = 12.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = PulseGridTextPrimary
-                        )
-                    }
-                }
+                Text(
+                    text = tab.title.uppercase(),
+                    style = EarthTheme.typography.microBadge,
+                    fontSize = 8.sp,
+                    color = if (isSelected) EarthColorTokens.BgObsidianDeep else EarthColorTokens.TextPrimary
+                )
             }
         }
     }
