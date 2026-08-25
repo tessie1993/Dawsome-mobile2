@@ -193,17 +193,28 @@ fun SoundBrowserScreen(
                                 }
                             }
 
+                            // LOAD always lands somewhere (existing sampler, or
+                            // Simpler-on-drop insert); the one impossible-target
+                            // case (zero tracks) shows on the row, never silent.
+                            val loadFailed = state.lastLoadFailedItemId == item.id
                             Box(
                                 modifier = Modifier
                                     .clip(RoundedCornerShape(3.dp))
-                                    .background(EarthColorTokens.EarthAmber)
+                                    .background(
+                                        if (loadFailed) EarthColorTokens.MeterAutumnRust
+                                        else EarthColorTokens.EarthAmber
+                                    )
                                     .clickable {
                                         if (item.sample != null) browserStateHolder.assignToSampler(item)
                                         else onLoadItem(item.id)
                                     }
                                     .padding(horizontal = 6.dp, vertical = 4.dp)
                             ) {
-                                Text("LOAD", style = EarthTheme.typography.microBadge, color = Color.Black)
+                                Text(
+                                    if (loadFailed) "NO TRACK" else "LOAD",
+                                    style = EarthTheme.typography.microBadge,
+                                    color = Color.Black
+                                )
                             }
                         }
                     }

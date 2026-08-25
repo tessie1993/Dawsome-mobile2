@@ -41,11 +41,15 @@ public:
     // so any held claims are released HERE - acking while RT is quiescent is
     // the one legal non-RT ack, and silently nulling them would strand the
     // artifacts in the builder's GC list (frees wait on the ack) forever.
+    // The UNCLAIMED offer is drained too: a clip conformed at the old rate
+    // must never be claimed after reopen and play off-speed (cycle-3); the
+    // audition simply does not resume across a rate change.
     void prepare(double sampleRate, OfferSlot<PreviewClip>& slot) noexcept {
         fadeFrames_ = sampleRate > 0.0 ? int(sampleRate * 0.005) : 240;
         if (fadeFrames_ < 1) fadeFrames_ = 1;
         if (retiring_ != nullptr) { slot.ackRetired(retiring_->epoch); retiring_ = nullptr; }
         if (current_ != nullptr) { slot.ackRetired(current_->epoch); current_ = nullptr; }
+        if (PreviewClip* stale = slot.claim()) slot.ackRetired(stale->epoch);
         playing_ = false;
     }
 
@@ -62,16 +66,24 @@ public:
             }
             if (current_ != nullptr) {
                 if (playing_) {                    // audible: fade it out
+                    // Fold the end-window tail into the captured gain - a
+                    // clip replaced inside its OWN tail fade must continue
+                    // from the level it was actually rendering at, never
+                    // jump back up (cycle-3 finding).
+                    const int64_t remaining = current_->handle->frames - pos_;
+                    const float tail = remaining < int64_t(fadeFrames_)
+                        ? float(remaining) / float(fadeFrames_) : 1.0f;
                     retiring_ = current_;
                     retirePos_ = pos_;
-                    retireGain_ = fadeGain_;
-                } else {                           // already silent: release
+                    retireGain_ = fadeGain_ * tail;
+                } else {                           // held stop/finished clip
                     slot.ackRetired(current_->epoch);
                 }
             } else {
-                // First-ever claim: ack the predecessor epoch so any older
-                // claimed-and-finished chain releases (graph-claim pattern;
-                // harmless when nothing older exists).
+                // First-ever claim (or all prior clips released): ack the
+                // predecessor epoch so any older claimed-and-finished chain
+                // releases (graph-claim pattern; harmless when nothing
+                // older exists - epochs are globally monotonic).
                 slot.ackRetired(nc->epoch - 1);
             }
             current_ = nc;
@@ -82,6 +94,16 @@ public:
 
         if (retiring_ != nullptr) renderRetiring(slot, l, r, n);
         if (playing_) renderCurrent(l, r, n);
+
+        // Release a finished (or stop/failed) clip as soon as no OLDER
+        // artifact is still fading: acking the newer epoch first would let
+        // the builder free the retiring clip mid-fade (acks are monotonic).
+        // This drops the SampleHandle pin, so a finished audition never
+        // keeps a large file unevictable for the session (cycle-3 finding).
+        if (!playing_ && current_ != nullptr && retiring_ == nullptr) {
+            slot.ackRetired(current_->epoch);
+            current_ = nullptr;
+        }
     }
 
     bool auditioning() const noexcept { return playing_; }
@@ -132,7 +154,7 @@ private:
         }
     }
 
-    PreviewClip* current_ = nullptr;    // claimed; held until replaced
+    PreviewClip* current_ = nullptr;    // claimed; released at playback end
     PreviewClip* retiring_ = nullptr;   // claimed; fading out, ack deferred
     int64_t pos_ = 0;
     int64_t retirePos_ = 0;

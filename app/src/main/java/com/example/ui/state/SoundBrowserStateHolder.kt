@@ -5,6 +5,7 @@ import com.example.data.media.FactorySample
 import com.example.synth.domain.DeviceType
 import com.example.synth.domain.ProjectAction
 import com.example.synth.domain.ProjectStore
+import com.example.synth.domain.TrackType
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -36,7 +37,9 @@ data class BrowserUiState(
     val searchQuery: String = "",
     val activeTags: Set<String> = emptySet(),
     val items: List<BrowserItem> = emptyList(),
-    val previewingItemId: String? = null
+    val previewingItemId: String? = null,
+    /** Set when a LOAD could not find any target track — never silent. */
+    val lastLoadFailedItemId: String? = null
 )
 
 class SoundBrowserStateHolder(
@@ -117,11 +120,14 @@ class SoundBrowserStateHolder(
     // ---- assignment ---------------------------------------------------------
 
     /**
-     * Load a sample row into the project: the selected track's first SAMPLER
-     * device gets it in slot 0 (with its root note), falling back to the
-     * first sampler anywhere. Drum-pad drag assignment ships with the drum
-     * lab pass — the engine seam (per-pad slots) is already live.
-     * Returns false when the project has no sampler to load into.
+     * Load a sample row into the project. An existing SAMPLER on the
+     * selected track wins (fallback: first sampler anywhere) and keeps its
+     * tweaked params; with no sampler in the project, the Simpler-on-drop
+     * gesture inserts one on the best target track in ONE undoable action
+     * (review cycle-3: the default project ships samplerless, so LOAD must
+     * create, never silently no-op). Returns false — and marks the row —
+     * only when the project has no track at all. Drum-pad drag assignment
+     * ships with the drum lab pass; the engine seam (per-pad slots) is live.
      */
     fun assignToSampler(item: BrowserItem): Boolean {
         val sample = item.sample ?: return false
@@ -134,12 +140,26 @@ class SoundBrowserStateHolder(
                 trackId = track.id, deviceId = sampler.id, slot = 0,
                 fileId = sample.fileId, path = sample.path, name = sample.name))
             // The file's recorded pitch rides as an ordinary param so playback
-            // is in key immediately (SamplerShared.rootNote).
+            // is in key immediately (SamplerShared.rootNote). One gesture,
+            // two undo steps here - the gesture-transaction pass folds it.
             store.dispatch(ProjectAction.SetDeviceParam(
                 track.id, sampler.id, "sample.root", sample.rootNote.toFloat()))
+            _state.value = _state.value.copy(lastLoadFailedItemId = null)
             return true
         }
-        return false
+        // Instrument-capable lanes only; a return/master chain never hosts one.
+        val target = candidates.firstOrNull {
+            it.type == TrackType.MIDI || it.type == TrackType.AUDIO || it.type == TrackType.DRUM
+        }
+        if (target == null) {
+            _state.value = _state.value.copy(lastLoadFailedItemId = item.id)
+            return false
+        }
+        store.dispatch(ProjectAction.LoadSampleIntoNewSampler(
+            trackId = target.id, fileId = sample.fileId, path = sample.path,
+            name = sample.name, rootNote = sample.rootNote))
+        _state.value = _state.value.copy(lastLoadFailedItemId = null)
+        return true
     }
 
     private fun refresh() {

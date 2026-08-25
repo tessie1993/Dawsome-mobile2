@@ -6,6 +6,97 @@ Newest entry first. Each entry: where the build stands, what comes next.
 
 ---
 
+## 2026-08-25 — Delta verdict: PASS — M5 finale fully gated through
+
+The reviewer verified the membership-diff commit (a3c7918) beyond the
+fix map: remove->upsert ordering inside one bundle (no compile-cycle
+window sees one without the other), linked-clip content pairings match
+the lexicographic-MIN rule, redo symmetry holds by construction, and the
+key safety property is named - removals are emitted only for entities
+absent from the AUTHORITATIVE post state, so a stale pre-state can only
+MISS removals (graceful degradation to the tracked-hole behavior), never
+produce a wrong one.
+
+One non-blocking MINOR, TRACKED (reviewer: "fix when convenient, ideally
+before MIDI-driven dispatch arrives"): ProjectStore's one-step guarantee
+rests on serialization the store does not actually enforce - the scope
+is Dispatchers.Default (a pool) while undo()/redo() run inline on the
+caller thread, and lastState is a plain var. Today every call originates
+on main and the overlap window is vanishingly small; the prescription is
+recorded verbatim for the MIDI-input milestone: confine the store to a
+single dispatcher (Main.immediate or a dedicated confined dispatcher)
+and route undo()/redo() through the same scope.launch as dispatch,
+making the one-step-deep property true by construction.
+
+M5 finale is COMPLETE behind the gate (cycles: FAIL -> fixed -> PASS ->
+delta PASS). The fix slice (e4a5d12 + a3c7918) goes up as the follow-up
+PR. STOPPED after this per the owner directive - no next feature.
+
+---
+
+## 2026-08-25 — Review cycle 3 re-verdict: PASS + interim membership-diff fix
+
+Reviewer verified all eight cycle-3 fixes in the code at e4a5d12 and
+passed the slice, with one remaining non-blocking MINOR: undo of the new
+Simpler-on-drop LOAD landed in the documented membership hole - the
+inserted sampler survived engine-side (audibly) because the null-action
+resync is upserts-only and the ghost device's uid gets no frames. The
+reviewer offered document-or-fix; TOOK THE FIX (their sketch): the
+undo/redo push now carries a PRE->POST membership diff
+(EngineSync.encodeMembershipRemovals) emitting explicit removes for
+every track/device/clip/scene the state change removed, in the same
+bundle the upserts follow - closes the whole ghost-entity class on the
+undo path one step deep (LOAD->undo, AddTrack->undo, clip add->undo).
+SampleRef removes on removal paths are now unconditional (16B; the
+engine map may hold entries this side's snapshot no longer shows).
+Divergence older than one step (missed bundles) still waits on the
+general engine-side mark-and-sweep - tracked, persistence milestone.
+
+Delta sent back for verification; on its PASS the fix slice goes up as
+the follow-up PR. STOP directive still standing: no next feature.
+
+---
+
+## 2026-08-25 — Review cycle 3: FAIL -> all findings fixed (resubmitted)
+
+The owner merged PR #10 ahead of the verdict; the fixes land as a
+follow-up slice on the restarted branch. Findings, fixed:
+
+- [MAJOR] Undo of a sample assignment never reached the engine: full
+  pushes are upserts-only, and an emptied slot sends nothing. Sample refs
+  are SET MEMBERSHIP - full pushes AND chain resends now reset-then-readd
+  per device (byteLen-0 remove-all first; idempotent). The broader
+  membership hole (tracks/devices/clips removed by undo survive a full
+  push - audibly, for a track) is documented at the seam and TRACKED for
+  the persistence milestone.
+- [MAJOR] LOAD was unreachable on the shipped default project (no SAMPLER
+  exists, none creatable in-app) and failed silently. New
+  LoadSampleIntoNewSampler action - the Simpler-on-drop gesture: ONE
+  undoable action appends a sampler with the ref + baked sample.root;
+  assignToSampler auto-creates on the best instrument-capable lane when
+  no sampler exists; the only remaining failure (zero tracks) surfaces
+  on the row as NO TRACK, never silent.
+- [MINOR] A finished audition pinned its file for the session: process()
+  now releases current_ (ack + unpin) as soon as no older artifact is
+  still fading - never acking a newer epoch past a live fade (monotonic
+  acks would let the builder free a mid-fade clip).
+- [MINOR] Replace-during-tail jumped the retiring gain back up: the
+  captured retire gain now folds in the tail factor.
+- [NIT] Stale-rate offer after reopen: prepare() drains the unclaimed
+  offer too; audition simply does not resume across a rate change.
+- [NIT] Factory tails cut hot (-14..-26 dB at truncation): 15 ms end
+  fade baked into every generated file.
+- [NIT] Install gate hardened: fsync before rename + length > 44
+  completeness predicate (crash-window husks can never pass).
+- [NIT deferrals tracked]: previewingItemId auto-clear at one-shot end
+  (wire PreviewPlayer::auditioning() into readback), gesture transactions
+  (assign+root = one undo step), drum-pad drag assignment.
+
+Host check green; map 208 classes, sweep green incl. duplicates.
+Resubmitted for the cycle-3 re-verdict. STOP directive still standing.
+
+---
+
 ## 2026-08-25 — M5 FINALE built: sample assignment + PreviewPlayer + factory pack (awaiting review cycle 3)
 
 The sample pipeline is closed end to end. OWNER DIRECTIVE ON RECORD: "stop

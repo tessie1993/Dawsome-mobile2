@@ -61,7 +61,10 @@ object FactoryPack {
             val dir = File(context.filesDir, PACK_DIR)
             val specs = packSpecs()
             val marker = File(dir, MARKER)
-            val complete = marker.exists() && specs.all { File(dir, it.fileName).exists() }
+            // A real WAV is header (44) + audio; length > 44 rejects the
+            // zero-length husks a crash-window rename can leave (cycle-3).
+            val complete = marker.exists() &&
+                specs.all { File(dir, it.fileName).length() > 44L }
             if (!complete) {
                 dir.mkdirs()
                 for (spec in specs) writeWavMono16(File(dir, spec.fileName), spec.render())
@@ -271,6 +274,15 @@ object FactoryPack {
         for (v in x) peak = maxOf(peak, abs(v))
         val g = 0.891f / peak                          // -1 dBFS
         for (i in x.indices) x[i] *= g
+        // Bake a 15 ms fade into the tail: the exponential decays are still
+        // -14..-26 dB at the truncation point, and SimpleSampler's one-shot
+        // end is a hard cut - an assigned open hat would tick without this
+        // (review cycle-3). Auditions/pads mask it; files must not rely on
+        // the player to.
+        val fade = minOf(frames(0.015f), x.size)
+        for (i in 0 until fade) {
+            x[x.size - fade + i] *= 1f - i.toFloat() / fade
+        }
         return x
     }
 
@@ -295,12 +307,15 @@ object FactoryPack {
             val s = (v.coerceIn(-1f, 1f) * 32767f).toInt()
             b.putShort(s.toShort())
         }
-        // Write-then-rename so a killed first run never leaves a half WAV
-        // behind the .complete gate's file-exists check.
+        // Write-fsync-rename: without the sync, delayed allocation after a
+        // power loss can leave a zero-length file behind the rename that the
+        // completeness gate would trust forever (review cycle-3; the gate
+        // also demands a plausible length, belt and braces).
         val tmp = File(file.parentFile, file.name + ".tmp")
         RandomAccessFile(tmp, "rw").use { raf ->
             raf.setLength(0)
             raf.write(bytes)
+            raf.fd.sync()
         }
         if (!tmp.renameTo(file)) {
             file.delete()

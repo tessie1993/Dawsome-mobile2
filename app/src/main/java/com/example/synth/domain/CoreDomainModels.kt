@@ -383,6 +383,15 @@ sealed interface ProjectAction {
         val trackId: String, val deviceId: String, val slot: Int,
         val fileId: Long, val path: String, val name: String
     ) : ProjectAction
+    /**
+     * The Simpler-on-drop gesture: append a new SAMPLER holding the sample
+     * (slot 0) with its root note baked in — ONE action, one undo step, so
+     * loading onto a track without a sampler never silently no-ops.
+     */
+    data class LoadSampleIntoNewSampler(
+        val trackId: String,
+        val fileId: Long, val path: String, val name: String, val rootNote: Int
+    ) : ProjectAction
     /** Transient browser audition — engine-side only, never a document edit. */
     data class PreviewSample(val fileId: Long, val path: String) : ProjectAction
     data object StopPreview : ProjectAction

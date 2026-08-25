@@ -335,6 +335,18 @@ class ProjectStore(
                     })
                 }
             )
+            is ProjectAction.LoadSampleIntoNewSampler -> current.copy(
+                tracks = current.tracks.map { track ->
+                    if (track.id != action.trackId) track
+                    else track.copy(devices = track.devices + DeviceModel(
+                        type = DeviceType.SAMPLER,
+                        name = action.name,
+                        params = mapOf("sample.root" to action.rootNote.toFloat()),
+                        sampleRefs = mapOf(0 to SampleRef(action.fileId, action.path, action.name))
+                    ))
+                }
+            )
+
             // Auditions are engine-transient: EngineSync forwards them, the
             // document does not change.
             is ProjectAction.PreviewSample, is ProjectAction.StopPreview -> current
