@@ -41,6 +41,8 @@ void PlaybackGraph::processBlock(int numFrames, const RenderFacts& facts) noexce
     const int n = numFrames > kMaxBlock ? kMaxBlock : numFrames;
     if (n <= 0) return;
 
+    voices.beginBlock();    // drift-proof recount before any note-ons land
+
     // Bus accumulators first: master mix + return inputs collect += taps.
     zeroBuf(mixL, n);
     zeroBuf(mixR, n);

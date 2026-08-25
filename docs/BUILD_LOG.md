@@ -6,6 +6,25 @@ Newest entry first. Each entry: where the build stands, what comes next.
 
 ---
 
+## 2026-08-25 — M3 feature 2 done: voice platform
+
+`device/VoiceAllocator.h` (which also hosts the cross-layer VoiceGroup +
+StealCandidate contract types - graph depends on device, never the reverse)
+and `graph/VoiceBudgetLedger.h`. Pool model: `polyphony` musical voices +
+headroom slots absorbing steal fades - a stolen voice fast-releases in its
+slot while the new note takes a free one; pool exhaustion kills the
+quietest fading slot as the documented last resort. Contract steal order
+throughout (allocator-internal AND the ledger's cross-group ranking):
+releasing -> unprotected -> oldest, level tiebreak; protection = transient
+window (drum hits) or the 2 most-recent serials. The ledger recounts from
+groups every block (drift-proof), grants requestVoice within kVoiceBudget=64
+or demands stealVoices(1) from the globally best victim. PlaybackGraph owns
+the ledger and beginBlock()s it; instruments register + consume from M4.
+Map: 162 classes, sweep green.
+
+**Next: M3 feature 3 (closes M3)** — racks/macros/modulation core +
+QualityMode plumbing + preset shape. Then M4 first sound.
+
 ## 2026-08-25 — M3 feature 1 done: DeviceChain + DeviceRegistry + param residency
 
 - `device/DeviceChain.h`: composite DeviceNode owning THE bypass contract -

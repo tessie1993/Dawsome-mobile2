@@ -15,6 +15,7 @@
 #include "MigrationPlan.h"
 #include "SendNode.h"
 #include "TrackStrip.h"
+#include "VoiceBudgetLedger.h"
 
 // The compiled realtime mixer (blueprint 2.3, graph/PlaybackGraph): an
 // immutable-topology artifact built whole by the GraphBuilder, offered via
@@ -166,6 +167,9 @@ struct PlaybackGraph {
 
     ParamResolver resolver;
     MigrationPlan migration;          // consumed once at swap
+    // Global polyphony accounting; instruments register at compile (M4+),
+    // ask requestVoice() at note-on, recounted every block.
+    VoiceBudgetLedger voices;
 
     // Builder-only: adoption scan data for the NEXT compile. configHash
     // participates in the seam-3 adopt condition (uid AND hash AND rate).

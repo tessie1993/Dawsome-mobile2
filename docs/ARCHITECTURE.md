@@ -536,6 +536,41 @@ classDiagram
     GraphBuilder ..> DeviceRegistry
     GraphBuilder ..> DeviceChain
 
+    %% ---- M3 device/graph (voice platform) ----
+    class StealCandidate {
+        <<one voice's steal ranking facts: releasing, protected (transient window / most-recent notes), ageSerial (smaller = older), level>>
+    }
+    class VoiceGroup {
+        <<abstract steal contract instruments expose to the ledger>>
+        +activeVoiceCount() int*
+        +bestStealCandidate() StealCandidate*
+        +stealVoices(count)*
+    }
+    class VoiceAllocator~VoiceT_MaxVoices~ {
+        <<per-instrument pool implementing VoiceGroup: `polyphony` musical voices + headroom slots absorbing steal fades (stolen voices fast-release IN PLACE while the new note takes a free slot; pool exhaustion kills the quietest fading slot - documented last resort). Contract steal order: releasing -> unprotected -> oldest, level tiebreak; protection = transient window OR the 2 most recent serials. noteOff releases the NEWEST non-releasing voice with the id (loop-pass instance ids make collisions rare). VoiceT duck-type: active/releasing/level/inTransientWindow/beginRelease/fastRelease/kill>>
+        +setPolyphony(n)
+        +acquire(noteId) Slot*
+        +noteOff(noteId)
+        +allNotesOff()
+        +killAll()
+        +activeVoiceCount() int
+        +bestStealCandidate() StealCandidate
+        +stealVoices(count)
+    }
+    class VoiceBudgetLedger {
+        <<global kVoiceBudget=64 enforcement inside a PlaybackGraph (voice accounting is transient render state): beginBlock recounts from every group (drift-proof); requestVoice grants within budget or ranks all groups' best candidates by the contract order and demands stealVoices(1) from the winner; refuses only when nothing is stealable>>
+        +registerGroup(g: VoiceGroup) bool
+        +beginBlock()
+        +requestVoice() bool
+        +activeVoices() int
+        +stealCount() uint32_t
+    }
+
+    VoiceGroup <|-- VoiceAllocator~VoiceT_MaxVoices~
+    VoiceGroup ..> StealCandidate
+    VoiceBudgetLedger ..> VoiceGroup
+    PlaybackGraph *-- VoiceBudgetLedger
+
     %% ---- M2 graph/ (strips + meters) ----
     class TrackStrip {
         <<channel strip AS a DeviceNode (resolver/migration/state uniform): volume (dB->gain at set), constant-power pan (-3dB center, per-channel gain targets), click-free mute; contract keys mixer.volume/pan/mute; gain-domain linear smoothing, current+target migrate (never-jumps); latency 0, configHash 0 (always adoptable); send levels live on SendNodes (M2 f2)>>
