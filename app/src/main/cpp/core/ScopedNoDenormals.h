@@ -2,42 +2,35 @@
 
 #include <cstdint>
 
-/**
- * Scoped RAII guard that enables Flush-To-Zero (FTZ) and Denormals-Are-Zero (DAZ)
- * in the ARM FPSCR floating point control register.
- * Prevents 100x CPU degradation during filter & reverb decay tails.
- */
+// RAII flush-to-zero / denormals-are-zero guard for the audio thread.
+// Denormal operands cost up to ~100x on some cores during IIR/reverb decay
+// tails; the callback arms this once per callback, restoring on exit.
+//
+// ARM64: FPCR bit 24 (FZ). x86-64 (host test builds): MXCSR FTZ (bit 15) and
+// DAZ (bit 6). Other hosts: no-op.
+
+namespace daw {
+
 class ScopedNoDenormals {
 public:
     ScopedNoDenormals() noexcept {
-#if defined(__arm__) || defined(__aarch64__)
-        #if defined(__aarch64__)
-            uint64_t fpcr;
-            asm volatile("mrs %0, fpcr" : "=r"(fpcr));
-            savedFpcr_ = fpcr;
-            // Set FZ (bit 24) to enable Flush-to-zero mode
-            fpcr |= (1ULL << 24);
-            asm volatile("msr fpcr, %0" : : "r"(fpcr));
-        #else
-            uint32_t fpscr;
-            asm volatile("vmrs %0, fpscr" : "=r"(fpscr));
-            savedFpcr_ = fpscr;
-            // Set FZ (bit 24) to enable Flush-to-zero mode
-            fpscr |= (1U << 24);
-            asm volatile("vmsr fpscr, %0" : : "r"(fpscr));
-        #endif
+#if defined(__aarch64__)
+        asm volatile("mrs %0, fpcr" : "=r"(saved_));
+        const uint64_t fz = saved_ | (uint64_t(1) << 24);
+        asm volatile("msr fpcr, %0" : : "r"(fz));
+#elif defined(__x86_64__) || defined(__i386__)
+        saved_ = static_cast<uint64_t>(getMxcsr());
+        setMxcsr(static_cast<uint32_t>(saved_) | (1u << 15) | (1u << 6));
 #else
-        savedFpcr_ = 0;
+        saved_ = 0;
 #endif
     }
 
     ~ScopedNoDenormals() noexcept {
-#if defined(__arm__) || defined(__aarch64__)
-        #if defined(__aarch64__)
-            asm volatile("msr fpcr, %0" : : "r"(savedFpcr_));
-        #else
-            asm volatile("vmsr fpscr, %0" : : "r"((uint32_t)savedFpcr_));
-        #endif
+#if defined(__aarch64__)
+        asm volatile("msr fpcr, %0" : : "r"(saved_));
+#elif defined(__x86_64__) || defined(__i386__)
+        setMxcsr(static_cast<uint32_t>(saved_));
 #endif
     }
 
@@ -45,5 +38,17 @@ public:
     ScopedNoDenormals& operator=(const ScopedNoDenormals&) = delete;
 
 private:
-    uint64_t savedFpcr_{0};
+#if defined(__x86_64__) || defined(__i386__)
+    static uint32_t getMxcsr() noexcept {
+        uint32_t v;
+        asm volatile("stmxcsr %0" : "=m"(v));
+        return v;
+    }
+    static void setMxcsr(uint32_t v) noexcept {
+        asm volatile("ldmxcsr %0" : : "m"(v));
+    }
+#endif
+    uint64_t saved_ = 0;
 };
+
+} // namespace daw

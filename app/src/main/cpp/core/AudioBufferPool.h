@@ -1,34 +1,68 @@
 #pragma once
 
-#include <vector>
-#include <cstddef>
 #include <memory>
 
-/**
- * Pre-allocated Scratch Buffer Pool.
- * Provides real-time thread scratch buffers without invoking malloc/new in audio callback.
- */
+#include "EngineConfig.h"
+#include "RtAssert.h"
+
+// Fixed pool of de-interleaved float scratch buffers for graph processing
+// (blueprint 2.3; Tracktion-style buffer reuse). All memory is allocated in
+// prepare() on the builder thread; acquire()/release() run on the audio
+// thread only and are plain freelist operations - no atomics needed because
+// the pool is owned by exactly one PlaybackGraph and touched only inside its
+// process call.
+//
+// Exhaustion returns null (graph compilation sizes the pool to its schedule's
+// worst case, so a null here is a builder bug, asserted in debug).
+
+namespace daw {
+
 class AudioBufferPool {
 public:
-    AudioBufferPool(size_t maxChannels = 8, size_t maxFrames = 4096, size_t poolSize = 16);
-    ~AudioBufferPool();
+    struct Buffer {
+        float* channels[kMaxChannels] = {nullptr, nullptr};
+        int    numChannels = 0;
+    };
 
-    void init(size_t maxChannels, size_t maxFrames, size_t poolSize);
+    // [builder] Allocate `count` stereo buffers of kMaxBlock frames.
+    void prepare(int count) noexcept {
+        DAW_RT_ASSERT(count > 0);
+        count_ = count;
+        storage_ = std::make_unique<float[]>(
+            static_cast<size_t>(count) * kMaxChannels * kMaxBlock);
+        buffers_ = std::make_unique<Buffer[]>(static_cast<size_t>(count));
+        freeList_ = std::make_unique<int[]>(static_cast<size_t>(count));
+        for (int i = 0; i < count; ++i) {
+            for (int ch = 0; ch < kMaxChannels; ++ch)
+                buffers_[i].channels[ch] =
+                    storage_.get() + (static_cast<size_t>(i) * kMaxChannels + ch) * kMaxBlock;
+            buffers_[i].numChannels = kMaxChannels;
+            freeList_[i] = i;
+        }
+        freeTop_ = count;
+    }
 
-    float* acquireChannelBuffer();
-    void releaseChannelBuffer(float* buffer);
+    // [RT] Borrow a scratch buffer. Contents are undefined; caller clears if summing.
+    Buffer* acquire() noexcept {
+        if (freeTop_ <= 0) { DAW_RT_ASSERT(false); return nullptr; }
+        return &buffers_[freeList_[--freeTop_]];
+    }
 
-    float** acquireStereoBuffer();
-    void releaseStereoBuffer(float** stereoPair);
+    // [RT] Return a buffer acquired this block.
+    void release(Buffer* b) noexcept {
+        DAW_RT_ASSERT(b != nullptr && freeTop_ < count_);
+        freeList_[freeTop_++] = static_cast<int>(b - buffers_.get());
+    }
 
-    void clearAll();
+    int capacity() const noexcept { return count_; }
+    int available() const noexcept { return freeTop_; }
 
 private:
-    size_t maxChannels_{8};
-    size_t maxFrames_{4096};
-    size_t poolSize_{16};
-
-    std::vector<float> rawStorage_;
-    std::vector<float*> freeList_;
-    size_t activeCount_{0};
+    std::unique_ptr<float[]>  storage_;
+    std::unique_ptr<Buffer[]> buffers_;
+    std::unique_ptr<int[]>    freeList_;
+    int count_ = 0;
+    int freeTop_ = 0;
 };
+
+} // namespace daw

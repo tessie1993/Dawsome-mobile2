@@ -273,64 +273,124 @@ classDiagram
         +evaluate(startBeat: double, endBeat: double, track: TrackNode)
     }
 
-    class ProcessContext {
-        +size_t numChannels
-        +size_t numFrames
-        +double sampleRate
-        +double currentBeat
-        +double samplePosition
-        +bool isPlaying
-        +bool isRecording
+    %% ---- M0 core/ (NEW ENGINE - realtime infrastructure, CONTRACTS.md) ----
+    class SpscRing~T_Capacity~ {
+        <<single-producer single-consumer ring, acquire-release, cache-line-split indices>>
+        +tryPush(value: T) bool
+        +tryPop(out: T) bool
+        +freeSlots() size_t
+        +pending() size_t
+    }
+
+    class EngineMessage {
+        <<64-byte POD, seam-2 frozen layout>>
+        +MsgFamily family
+        +uint8_t op
+        +uint16_t flags
+        +uint32_t editSeq
+        +NodeUid nodeUid
+        +ParamKeyHash paramKeyHash
+        +uint32_t a
+        +int64_t samplePos
+        +double beat
+        +double v0
+        +double v1
+        +uint64_t b
+    }
+
+    class EventRing~Capacity~ {
+        <<lossless message channel; note-ON reserves its OFF slot>>
+        +tryPush(m: EngineMessage) bool
+        +tryPop(out: EngineMessage) bool
+    }
+
+    class ParamMoveTable {
+        <<per-producer coalescing latest-wins table, per-slot seqlock>>
+        +set(uid, key, plain, editSeq) bool
+        +drainDirty(apply)
+        +reapplyNewerThan(graphSeq, apply)
+        +publishInstalledGraphSeq(seq)
+        +consumeOverflowFlag() bool
+    }
+
+    class Seqlock~T~ {
+        <<single-writer POD publication, Boehm fence discipline>>
+        +publish(value: T)
+        +read(out: T) uint32_t
+        +version() uint32_t
+    }
+
+    class OfferSlot~T~ {
+        <<single-slot builder-to-RT handover; artifact carries its own epoch>>
+        +offer(built: T*) T*
+        +claim() T*
+        +ackRetired(epoch)
+        +retiredAcked(epoch) bool
+    }
+
+    class SmoothedValue {
+        <<linear ramp, exact arrival, state migrates across swaps>>
+        +prepare(sampleRate, smoothingMs)
+        +snap(value: float)
+        +setTarget(value: float)
+        +getNext() float
+        +skip(n: int)
+        +isSmoothing() bool
     }
 
     class AudioBufferPool {
-        +prepare(maxBlockSize: size_t, channelCount: size_t)
-        +acquireBuffer() float**
-        +releaseBuffer(buffer: float**)
+        <<builder-allocated stereo scratch buffers, RT freelist>>
+        +prepare(count: int)
+        +acquire() Buffer*
+        +release(b: Buffer*)
+        +available() int
     }
 
-    class ScopedNoDenormals {
-        -uint32_t savedFpscr_
-        +ScopedNoDenormals()
-        +~ScopedNoDenormals()
-    }
-
-    class SmoothedValue~T~ {
-        +setRampFrames(frames: int)
-        +setTarget(target: T)
-        +getNext() T
-        +getTarget() T
-        +reset(initialValue: T)
+    class TimeAnchor {
+        <<per-callback clock anchor published via Seqlock>>
+        +int64_t framePosition
+        +int64_t monotonicNanos
+        +double sampleRate
+        +framesAt(nanos: int64_t) int64_t
     }
 
     class MeterFrame {
-        +int32_t trackId
+        <<32-byte lossy metering POD>>
+        +NodeUid uid
         +float peakL
         +float peakR
         +float rmsL
         +float rmsR
-        +float truePeak
         +float gainReductionDb
-        +bool isClipping
+        +uint16_t flags
+        +uint16_t seq
     }
 
-    class EngineCommand {
-        +CommandType type
-        +int16_t trackIndex
-        +int16_t deviceIndex
-        +int16_t paramId
-        +int16_t noteNumber
-        +float floatValue1
-        +float floatValue2
-        +int32_t intValue1
-        +int32_t intValue2
+    class RtRandom {
+        <<xorshift64* + musical seed (clipUid, quantizedPos, loopPassIndex)>>
+        +reseed(seed)
+        +nextU64() uint64_t
+        +nextFloat01() float
+        +chance(p: float) bool
+        +musicalSeed(clipUid, quantizedPos, loopPassIndex) uint64_t
+    }
+
+    class FixedVector~T_Capacity~ {
+        <<inline-storage POD vector, no heap>>
+        +push_back(value: T) bool
+        +eraseUnordered(i: size_t)
+        +clear()
+        +size() size_t
+    }
+
+    class ScopedNoDenormals {
+        <<RAII FTZ-DAZ guard: ARM64 FPCR bit 24, x86 MXCSR bits 15 and 6>>
+        +ScopedNoDenormals()
+        +~ScopedNoDenormals()
     }
 
     %% Native DSP primitives & support types (header-only helpers used
     %% inside the nodes above; listed for completeness of the map)
-    class LockFreeQueue~T_Capacity~ {
-        <<SPSC ring buffer>>
-    }
     class Oscillator {
         <<band-limited osc core>>
     }

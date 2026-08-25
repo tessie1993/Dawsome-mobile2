@@ -1,75 +1,69 @@
 #pragma once
 
-#include <cmath>
+#include "RtAssert.h"
 
-/**
- * 1-pole Low-Pass Filter Parameter Smoother.
- * Eliminates audio clicks, zipper noise, and pops during real-time modulation and knob turns.
- */
-template <typename FloatType = float>
+// Linear parameter smoothing (CONTRACTS.md seam 1; blueprint 5). Every
+// audible continuous parameter passes through one of these after resolution;
+// the ramp time comes from the ParamDescriptor (smoothingMs, 0 = stepped).
+// Linear ramps are the industry default for gain-class parameters: constant
+// slope, exact arrival, no denormal tail (unlike one-pole exponential).
+//
+// State migrates across graph swaps (current value AND target travel in the
+// NodeState block), so a fader ridden through a rebuild never jumps.
+
+namespace daw {
+
 class SmoothedValue {
 public:
-    SmoothedValue() noexcept : currentValue_(0), targetValue_(0), step_(0), remainingSteps_(0) {}
-
-    explicit SmoothedValue(FloatType initialValue) noexcept
-        : currentValue_(initialValue), targetValue_(initialValue), step_(0), remainingSteps_(0) {}
-
-    void reset(double sampleRate, double rampTimeSeconds) noexcept {
-        sampleRate_ = sampleRate;
-        rampLengthSteps_ = static_cast<int>(std::max(1.0, rampTimeSeconds * sampleRate));
-        remainingSteps_ = 0;
-        currentValue_ = targetValue_;
+    void prepare(double sampleRate, float smoothingMs) noexcept {
+        DAW_RT_ASSERT(sampleRate > 0.0);
+        rampSamples_ = smoothingMs <= 0.0f
+                           ? 0
+                           : static_cast<int>(sampleRate * (smoothingMs * 0.001f) + 0.5f);
+        snap(target_);
     }
 
-    void setTargetValue(FloatType newTarget) noexcept {
-        if (targetValue_ == newTarget) return;
-
-        targetValue_ = newTarget;
-        if (rampLengthSteps_ <= 0) {
-            currentValue_ = newTarget;
-            remainingSteps_ = 0;
-            return;
-        }
-
-        remainingSteps_ = rampLengthSteps_;
-        step_ = (targetValue_ - currentValue_) / static_cast<FloatType>(remainingSteps_);
+    // Jump immediately (initialisation, reset, stepped params).
+    void snap(float value) noexcept {
+        current_ = target_ = value;
+        remaining_ = 0;
+        step_ = 0.0f;
     }
 
-    void setCurrentAndTargetValue(FloatType value) noexcept {
-        currentValue_ = value;
-        targetValue_ = value;
-        remainingSteps_ = 0;
-        step_ = 0;
+    void setTarget(float value) noexcept {
+        if (value == target_) return;
+        target_ = value;
+        if (rampSamples_ <= 0) { snap(value); return; }
+        remaining_ = rampSamples_;
+        step_ = (target_ - current_) / static_cast<float>(rampSamples_);
     }
 
-    inline FloatType getNextValue() noexcept {
-        if (remainingSteps_ > 0) {
-            --remainingSteps_;
-            currentValue_ += step_;
-            if (remainingSteps_ == 0) {
-                currentValue_ = targetValue_;
-            }
-        }
-        return currentValue_;
+    // Per-sample advance.
+    float getNext() noexcept {
+        if (remaining_ <= 0) return current_;
+        current_ += step_;
+        if (--remaining_ == 0) current_ = target_;   // exact arrival
+        return current_;
     }
 
-    inline FloatType getCurrentValue() const noexcept {
-        return currentValue_;
+    // Advance n samples without producing values (control-rate consumers).
+    void skip(int n) noexcept {
+        if (remaining_ <= 0) return;
+        if (n >= remaining_) { current_ = target_; remaining_ = 0; return; }
+        current_ += step_ * static_cast<float>(n);
+        remaining_ -= n;
     }
 
-    inline FloatType getTargetValue() const noexcept {
-        return targetValue_;
-    }
-
-    inline bool isSmoothing() const noexcept {
-        return remainingSteps_ > 0;
-    }
+    bool  isSmoothing() const noexcept { return remaining_ > 0; }
+    float current() const noexcept { return current_; }
+    float target() const noexcept { return target_; }
 
 private:
-    double sampleRate_{44100.0};
-    int rampLengthSteps_{256};
-    FloatType currentValue_{0};
-    FloatType targetValue_{0};
-    FloatType step_{0};
-    int remainingSteps_{0};
+    float current_ = 0.0f;
+    float target_ = 0.0f;
+    float step_ = 0.0f;
+    int   remaining_ = 0;
+    int   rampSamples_ = 0;
 };
+
+} // namespace daw
