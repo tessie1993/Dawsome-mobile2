@@ -37,6 +37,7 @@ object WireProtocol {
     const val FAMILY_NOTE = 2
     const val FAMILY_STRUCTURE = 3
     const val FAMILY_SYSTEM = 4
+    const val FAMILY_SESSION = 5   // contracts v1.1, append-only
 
     const val TRANSPORT_PLAY = 0
     const val TRANSPORT_STOP = 1
@@ -66,6 +67,15 @@ object WireProtocol {
     const val NOTE_PITCH_BEND = 3
     const val NOTE_SLIDE = 4
     const val NOTE_ALL_NOTES_OFF = 5
+
+    const val SESSION_LAUNCH_CLIP = 0
+    const val SESSION_STOP_SLOT = 1
+    const val SESSION_RETURN_TRACK = 2
+    const val SESSION_RETURN_ALL = 3
+    const val SESSION_SET_LAUNCH_QUANTUM = 4
+    const val LAUNCH_QUANTUM_NONE = 0
+    const val LAUNCH_QUANTUM_BAR = 1
+    const val LAUNCH_QUANTUM_FIXED_BEATS = 2
 
     const val SYSTEM_PANIC = 0
     const val SYSTEM_REQUEST_METER_FLUSH = 1

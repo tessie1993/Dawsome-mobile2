@@ -134,11 +134,11 @@ void GraphBuilder::buildTimeline() {
                   return a.first < b.first;
               });
 
-    // Pass 1: size the flat stores (arrangement clips whose track AND content
-    // resolve; dangling references are skipped + counted - seam-4 skew rule).
+    // Pass 1: size the flat stores (arrangement AND session clips whose
+    // track AND content resolve; dangling references are skipped + counted -
+    // seam-4 skew rule).
     size_t clipTotal = 0, noteTotal = 0;
     for (const auto& [cuid, c] : model_.clips()) {
-        if (c.slotIndex != -1) continue;                       // session clips: M5
         if (model_.tracks().find(c.trackUid) == model_.tracks().end() ||
             model_.contents().find(c.contentUid) == model_.contents().end()) {
             danglingRefs_.fetch_add(1, std::memory_order_relaxed);
@@ -150,67 +150,86 @@ void GraphBuilder::buildTimeline() {
     snap->noteStore.reserve(noteTotal);
     snap->clipStore.reserve(clipTotal);
 
-    // Pass 2: fill stores track by track; views take pointers only after the
-    // exact reserve, so nothing reallocates underneath them.
-    struct TrackRange { NodeUid uid; uint8_t type; size_t firstClip; size_t clipCount; };
+    // Pass 2: fill stores track by track (arrangement lane sorted by
+    // placement, then that track's session slots in slot order); views take
+    // pointers only after the exact reserve, so nothing reallocates
+    // underneath them.
+    struct TrackRange {
+        NodeUid uid; uint8_t type;
+        size_t firstClip; size_t clipCount;
+        size_t firstSession; size_t sessionCount;
+    };
     std::vector<TrackRange> ranges;
     ranges.reserve(ordered.size());
 
-    std::vector<const ModelClip*> trackClips;
     std::vector<std::pair<NodeUid, const ModelClip*>> clipIndex;   // clipUid + data
     clipIndex.reserve(model_.clips().size());
     for (const auto& [cuid, c] : model_.clips()) clipIndex.emplace_back(cuid, &c);
 
+    auto pushClip = [&](NodeUid cuid, const ModelClip& c) {
+        const ModelClipContent& content = model_.contents().at(c.contentUid);
+
+        const size_t firstNote = snap->noteStore.size();
+        for (const ModelNote& n : content.notes) {
+            SnapshotNote sn;
+            sn.id = n.id;
+            sn.pitch = n.pitch;
+            sn.velocity = n.velocity;
+            sn.startBeat = n.startBeat;
+            sn.lengthBeats = n.lengthBeats;
+            snap->noteStore.push_back(sn);
+        }
+        std::sort(snap->noteStore.begin() + firstNote, snap->noteStore.end(),
+                  [](const SnapshotNote& a, const SnapshotNote& b) {
+                      return a.startBeat < b.startBeat;
+                  });
+
+        ClipView view;
+        view.clipUid = cuid;
+        view.trackUid = c.trackUid;
+        view.contentUid = c.contentUid;
+        view.startBeat = c.startBeat;
+        view.lengthBeats = c.lengthBeats;
+        view.contentLengthBeats = content.lengthBeats;
+        view.looping = c.looping;
+        view.notes = snap->noteStore.data() + firstNote;
+        view.noteCount = static_cast<uint32_t>(snap->noteStore.size() - firstNote);
+        snap->clipStore.push_back(view);
+    };
+
+    std::vector<std::pair<NodeUid, const ModelClip*>> lane;
     for (const auto& [tuid, track] : ordered) {
-        trackClips.clear();
-        std::vector<NodeUid> clipUids;
+        // Arrangement lane, sorted by placement.
+        lane.clear();
         for (const auto& [cuid, c] : clipIndex) {
             if (c->trackUid != tuid || c->slotIndex != -1) continue;
             if (model_.contents().find(c->contentUid) == model_.contents().end()) continue;
-            trackClips.push_back(c);
-            clipUids.push_back(cuid);
+            lane.emplace_back(cuid, c);
         }
-        // Sort this track's clips by placement.
-        std::vector<size_t> idx(trackClips.size());
-        for (size_t i = 0; i < idx.size(); ++i) idx[i] = i;
-        std::sort(idx.begin(), idx.end(), [&](size_t a, size_t b) {
-            return trackClips[a]->startBeat < trackClips[b]->startBeat;
+        std::sort(lane.begin(), lane.end(), [](const auto& a, const auto& b) {
+            return a.second->startBeat < b.second->startBeat;
         });
-
         const size_t firstClip = snap->clipStore.size();
-        for (const size_t i : idx) {
-            const ModelClip& c = *trackClips[i];
-            const ModelClipContent& content = model_.contents().at(c.contentUid);
+        for (const auto& [cuid, c] : lane) pushClip(cuid, *c);
+        const size_t clipCount = snap->clipStore.size() - firstClip;
 
-            const size_t firstNote = snap->noteStore.size();
-            for (const ModelNote& n : content.notes) {
-                SnapshotNote sn;
-                sn.id = n.id;
-                sn.pitch = n.pitch;
-                sn.velocity = n.velocity;
-                sn.startBeat = n.startBeat;
-                sn.lengthBeats = n.lengthBeats;
-                snap->noteStore.push_back(sn);
-            }
-            std::sort(snap->noteStore.begin() + firstNote, snap->noteStore.end(),
-                      [](const SnapshotNote& a, const SnapshotNote& b) {
-                          return a.startBeat < b.startBeat;
-                      });
-
-            ClipView view;
-            view.clipUid = clipUids[i];
-            view.trackUid = tuid;
-            view.contentUid = c.contentUid;
-            view.startBeat = c.startBeat;
-            view.lengthBeats = c.lengthBeats;
-            view.contentLengthBeats = content.lengthBeats;
-            view.looping = c.looping;
-            view.notes = snap->noteStore.data() + firstNote;
-            view.noteCount = static_cast<uint32_t>(snap->noteStore.size() - firstNote);
-            snap->clipStore.push_back(view);
+        // Session slots, slot order (uid tiebreak for determinism).
+        lane.clear();
+        for (const auto& [cuid, c] : clipIndex) {
+            if (c->trackUid != tuid || c->slotIndex == -1) continue;
+            if (model_.contents().find(c->contentUid) == model_.contents().end()) continue;
+            lane.emplace_back(cuid, c);
         }
-        ranges.push_back({tuid, track->type, firstClip,
-                          snap->clipStore.size() - firstClip});
+        std::sort(lane.begin(), lane.end(), [](const auto& a, const auto& b) {
+            if (a.second->slotIndex != b.second->slotIndex)
+                return a.second->slotIndex < b.second->slotIndex;
+            return a.first < b.first;
+        });
+        const size_t firstSession = snap->clipStore.size();
+        for (const auto& [cuid, c] : lane) pushClip(cuid, *c);
+
+        ranges.push_back({tuid, track->type, firstClip, clipCount,
+                          firstSession, snap->clipStore.size() - firstSession});
     }
 
     snap->tracks.reserve(ranges.size());
@@ -220,6 +239,8 @@ void GraphBuilder::buildTimeline() {
         t.trackType = r.type;
         t.clips = snap->clipStore.data() + r.firstClip;
         t.clipCount = static_cast<uint32_t>(r.clipCount);
+        t.sessionClips = snap->clipStore.data() + r.firstSession;
+        t.sessionClipCount = static_cast<uint32_t>(r.sessionCount);
         snap->tracks.push_back(t);
     }
 

@@ -302,14 +302,17 @@ classDiagram
         +notesInRange(fromBeat, toBeat) NoteSpan
     }
     class TrackTimeline {
-        <<per-track view: arrangement clips sorted by placement>>
+        <<per-track view: arrangement clips sorted by placement + session slots in slot order (M4; same ClipView shape - placement fields idle, the SessionPlayer's anchor is the timeline position; bounded scene window D4 narrows the list later)>>
         +NodeUid trackUid
         +uint8_t trackType
         +const ClipView* clips
         +uint32_t clipCount
+        +const ClipView* sessionClips
+        +uint32_t sessionClipCount
+        +sessionClipByUid(uid) ClipView*
     }
     class TimelineSnapshot {
-        <<immutable builder-compiled timeline artifact: flat stores + views (pointers stable by exact-reserve-then-fill); epoch (OfferSlot), builtFromEditSeq (ordering rule), tempoMapRev (stale detect); RT only reads. Session-slot views join at M5; dangling refs skipped at compile (seam-4 skew)>>
+        <<immutable builder-compiled timeline artifact: flat stores + views (pointers stable by exact-reserve-then-fill); epoch (OfferSlot), builtFromEditSeq (ordering rule), tempoMapRev (stale detect); RT only reads; dangling refs skipped at compile (seam-4 skew)>>
         +uint64_t epoch
         +uint32_t builtFromEditSeq
         +uint32_t tempoMapRev
@@ -339,11 +342,33 @@ classDiagram
         <<[RT] allocation-free scheduling from the installed TimelineSnapshot: positional facts (starting notes, loop-pass index, future probability seeds) DERIVED from the TransportSpan, never accumulated - only state is the sounding-note table. Stuck-note guarantees: mapped OFFs, flush on stop/seek/wrap, synthetic OFFs on snapshot swap (matched by content id; loop passes get fresh instance ids), admission invariant reserves one pool slot per sounding note so emitOff is infallible, refused ONs counted. Output: flat event pool + per-track segments sorted (offset, OFF-before-ON); instruments consume from M4; MidiClipPlayer (comping/MPE/probability state) grows out at M7>>
         +beginBlock()
         +onTimelineSwap(t: TimelineSnapshot*)
-        +scheduleSpan(timeline, span: TransportSpan, map: TempoMap, playing)
+        +scheduleSpan(timeline, span: TransportSpan, map: TempoMap, playing, session: SessionPlayer*)
+        +flushTrack(trackUid, sampleOffset)
         +allNotesOff(sampleOffset)
         +events() FixedVector~MidiEvent~
         +segments() FixedVector~TrackEvents~
         +scheduledOns() / scheduledOffs() / syntheticOffs() / overflowDrops()
+    }
+
+    %% ---- M4 sequencer/ (SessionPlayer - launch-minimal session playback) ----
+    class SessionSource {
+        <<the arbiter's per-track verdict the scheduler consumes>>
+        +bool owned
+        +NodeUid clipUid
+        +double anchorBeat
+    }
+    class SessionPlayer {
+        <<[RT] launch-minimal SessionPlayer + TrackPlaybackArbiter + LaunchQuantizer (blueprint M4 cut; full launch modes/legato/follow actions at their milestones). Fixed per-track rows; boundaries on the ABSOLUTE song grid (ceil(now/quantum)*quantum - off-bar seeks stay musical); ownership flips only AT boundaries (arrangement sounds until the musical moment - spec: overrides only its own track); StopSlot leaves the track session-owned + silent (Back to Arrangement model); launch-while-stopped activates immediately and starts the transport; loop wraps re-anchor unreachable boundaries to the wrap point; anchor = activation beat, clip-local position derived (beat-anchor) mod len - stateless across seeks. Flush cuts hand back through a duck-typed callback so the header stays scheduler-independent; rows pruned against each installed snapshot>>
+        +launch(trackUid, clipUid, nowBeat, playing, barBeats) bool
+        +stopSlot(trackUid, nowBeat, playing, barBeats)
+        +returnTrack(trackUid, blockOffset, flush) / returnAll(blockOffset, flush)
+        +setQuantum(mode: QuantumMode, beats)
+        +onLoopWrap(wrapStartBeat)
+        +activateDueAt(beat, blockOffset, playing, flush)
+        +nextBoundaryWithin(fromBeat, toBeat) double
+        +sourceFor(trackUid) SessionSource
+        +pruneAgainst(t: TimelineSnapshot*)
+        +rowExhaustions() / anySessionOwned()
     }
 
     MidiScheduler ..> TimelineSnapshot
@@ -351,7 +376,11 @@ classDiagram
     MidiScheduler ..> TransportSpan
     MidiScheduler *-- MidiEvent
     MidiScheduler ..> MidiEventSpan
+    MidiScheduler ..> SessionPlayer
+    SessionPlayer ..> SessionSource
+    SessionPlayer ..> TimelineSnapshot
     AudioEngine *-- MidiScheduler
+    AudioEngine *-- SessionPlayer
 
     %% ---- M0 engine/ (NEW ENGINE - driver + callback spine) ----
     class StreamTime {
@@ -392,7 +421,7 @@ classDiagram
         +uint32_t flags
     }
     class AudioEngine {
-        <<facade + RT callback spine: anchor publish -> BLOCK-BOUNDARY SWAPS (PlaybackGraph claim: executeAdopt while the old graph is still valid, install, ack retired ?: epoch-1, publishInstalledGraphSeq to both tables, reapplyNewerThan through the NEW resolver; TimelineSnapshot claim + scheduler reconcile) -> drains (param moves resolve through the installed graph, misses = counted seam-4 skew) -> transport advance + MIDI scheduling per span -> input consume -> graph processBlock (Main bus -> driver outs; silence before first claim) -> meters to MeterBus -> clock publish. Same-rate reopen keeps transport state. Instruments write into track buffers from M4>>
+        <<facade + RT callback spine: anchor publish -> BLOCK-BOUNDARY SWAPS (PlaybackGraph claim: executeAdopt while the old graph is still valid, install, ack retired ?: epoch-1, publishInstalledGraphSeq to both tables, reapplyNewerThan through the NEW resolver; TimelineSnapshot claim + scheduler reconcile + SessionPlayer row prune) -> drains (param moves resolve through the installed graph, misses = counted seam-4 skew; Session family ops -> SessionPlayer, launch-while-stopped starts the transport) -> transport advance, each span further SPLIT at session launch boundaries (activateDueAt at every sub-span start cuts the outgoing source via flushTrack; sample-exact activations, split-guard leftovers land next block) + MIDI/metronome scheduling per sub-span with the SessionPlayer as arbiter -> input consume -> graph processBlock (Main bus -> driver outs; silence before first claim) -> meters to MeterBus -> clock publish. Same-rate reopen keeps transport state. Instruments write into track buffers from M4>>
         +start(cfg: OboeDriver.Config) bool
         +stop()
         +jniEvents() EventRing
@@ -1523,6 +1552,10 @@ classDiagram
         +noteOn(nodeUid, noteId, pitchSemitones, velocity)
         +noteOff(nodeUid, noteId, releaseVelocity)
         +allNotesOff(nodeUid)
+        +launchClip(trackUid, clipUid, slotIndex)
+        +stopSlot(trackUid)
+        +returnTrackToArrangement(trackUid) / returnAllToArrangement()
+        +setLaunchQuantum(mode, beats)
         +panic()
         +flush(handle: Long) FlushResult
     }
@@ -1563,7 +1596,7 @@ classDiagram
         +estimatedSamplePos(nowNanos: Long) Long
     }
     class EngineSync {
-        <<the change-classification seam (dual-model), complete for M1: transport intents -> messages, param moves -> Param/Move, structure edits -> ModelDelta bundles - all stamped with the store's real editSeq. Cascading removes derive from the PRE-change state; shared ClipContent removed only when unreferenced in post-state; canonical content id of a linked arr/session pair = lexicographic MIN of the clip ids (forward-compatible with explicit ClipContent + copy-on-unlink at the session milestone). Drum steps flatten to NoteRecords via DrumPadType.midiPitch with stable fnv32 step ids. NULL store action (undo/redo) and every RUNNING transition -> full model push + param resend (idempotent wholesale resync)>>
+        <<the change-classification seam (dual-model), complete for M1: transport intents -> messages, param moves -> Param/Move, structure edits -> ModelDelta bundles - all stamped with the store's real editSeq. Cascading removes derive from the PRE-change state; shared ClipContent removed only when unreferenced in post-state; canonical content id of a linked arr/session pair = lexicographic MIN of the clip ids (forward-compatible with explicit ClipContent + copy-on-unlink at the session milestone). Drum steps flatten to NoteRecords via DrumPadType.midiPitch with stable fnv32 step ids. Session intents (M4) -> seam-2 Session ops: a slot press launches the clip at that slot or, empty, sends the stop (mirroring the reducer's isPlaying marks); TriggerScene fans one launch/stop per track in ONE flush so every lane shares the boundary; the store's isPlaying/isOverriddenBySession flags are the optimistic UI (engine slot readback deferred). NULL store action (undo/redo) and every RUNNING transition -> full model push + param resend (idempotent wholesale resync)>>
         +attach()
         +detach()
         +pushFullModel(state, editSeq)

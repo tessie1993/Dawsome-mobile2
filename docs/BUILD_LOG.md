@@ -6,6 +6,60 @@ Newest entry first. Each entry: where the build stands, what comes next.
 
 ---
 
+## 2026-08-25 — M4 COMPLETE: launch-minimal SessionPlayer — the session grid plays
+
+M4's finale: session clips launch, loop, stop and hand tracks back to the
+arrangement. With this, blueprint §11 M4 is fully landed (SubtractiveSynth +
+MetronomeNode + Wavetable/FM + SessionPlayer launch-minimal).
+
+- CONTRACTS.md -> v1.1.0 (first amendment): seam 2 gains the append-only
+  `Session` message family {LaunchClip, StopSlot, ReturnTrack, ReturnAll,
+  SetLaunchQuantum}. Vocabulary only - layout untouched, kMessageVersion
+  stays 1. Code + contract landed together.
+- sequencer/SessionPlayer.h NEW ([RT], allocation-free): fixed per-track
+  rows; launch boundaries on the ABSOLUTE song grid
+  (ceil(now/quantum)*quantum - researched Ableton rule, off-bar seeks stay
+  musical; quantum modes none/bar/fixed-beats, bar derived from the live
+  time signature); ownership flips only AT boundaries so the arrangement
+  sounds until the musical moment (spec §1.1: overrides only its own
+  track); StopSlot leaves the track session-owned + silent (Back to
+  Arrangement model, spec line 1202 commands both per-track and global);
+  launch-while-stopped activates immediately + starts the transport; loop
+  wraps re-anchor unreachable boundaries to the wrap point; anchor =
+  activation beat and clip-local position is (beat-anchor) mod len -
+  stateless across seeks (negative passes = phase-locked history). Flush
+  cuts hand back via duck-typed callback (codec-visitor house pattern) so
+  the header stays scheduler-independent; rows pruned per snapshot swap.
+- TimelineSnapshot: TrackTimeline gains per-track session ClipView lists
+  (slot order); GraphBuilder.buildTimeline compiles them (exact-reserve
+  discipline preserved - pass 1 now counts both kinds).
+- MidiScheduler: scheduleSpan takes the SessionPlayer as arbiter
+  (session-owned lanes schedule their launched clip from the anchor and
+  silence their arrangement clips); flushTrack (per-track cut) added;
+  swap reconciliation searches session lists too. Session clips have no
+  placement end (kNoPlacementEnd) - loop-crossing note tails sustain,
+  matching the arrangement looping rule.
+- AudioEngine: Session family drain -> SessionPlayer; each transport span
+  further SPLIT at launch boundaries (sample-exact activation; sub-sample
+  edge activates at current offset; split-guard leftovers land next block,
+  bounded lateness); SessionPlayer pruned at timeline swaps.
+- Kotlin: WireProtocol FAMILY_SESSION + ops; CommandEncoder launch methods;
+  EngineSync routes the four store intents (slot press -> launch, empty
+  slot -> stop, mirroring the reducer's isPlaying marks; TriggerScene fans
+  per-track ops in ONE flush so lanes share the boundary). Store flags stay
+  the optimistic UI - engine slot-state readback is a documented deferral
+  (status-flags bit 1<<11 reserved candidate).
+- Deferred at their milestones: per-clip launch quantization + launch
+  modes/legato, follow actions, SessionRecorder, scene window D4 bounding,
+  MidiClipPlayer statefulness (M7).
+- Map: 185 classes, sweep green both directions.
+
+**Next: M5 drums & sampling** (blueprint §11): decode + resident
+SampleCache + PreviewPlayer audition pull forward; DrumRack, DrumPadSampler
+(synthesis modes), StepSequencerCore, SimpleSampler, SliceEngine.
+
+---
+
 ## 2026-08-25 — M4 feature 3 done: WavetableSynth + FmSynth on the new PolyInstrument shell
 
 The default project's LEAD now sounds (Wavetable Lab, DeviceTypeId 1) and

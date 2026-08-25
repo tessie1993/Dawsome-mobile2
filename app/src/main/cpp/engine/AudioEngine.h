@@ -14,6 +14,7 @@
 #include "../graph/PlaybackGraph.h"
 #include "../sequencer/MetronomeNode.h"
 #include "../sequencer/MidiScheduler.h"
+#include "../sequencer/SessionPlayer.h"
 #include "../sequencer/TimelineSnapshot.h"
 #include "../sequencer/TransportEngine.h"
 #include "OboeDriver.h"
@@ -99,6 +100,8 @@ public:
 private:
     void drainEvents(EventRing<>& ring) noexcept;
     void applyTransport(const EngineMessage& m) noexcept;
+    void applySession(const EngineMessage& m) noexcept;
+    double barBeats() const noexcept;   // current time signature's bar, in beats
 
     static constexpr int kEventDrainCap = 256;   // per ring per slice
 
@@ -123,6 +126,7 @@ private:
     PlaybackGraph* graph_ = nullptr;               // RT-owned current pointer
 
     MidiScheduler midiScheduler_;
+    SessionPlayer sessionPlayer_;
     MetronomeNode metronome_;
 
     std::unique_ptr<GraphBuilder> builder_;

@@ -63,6 +63,40 @@ void AudioEngine::applyTransport(const EngineMessage& m) noexcept {
     }
 }
 
+double AudioEngine::barBeats() const noexcept {
+    const double num = transport_.timeSigNumerator();
+    const double den = transport_.timeSigDenominator();
+    return den > 0.0 ? num * 4.0 / den : 4.0;   // beats are quarter notes
+}
+
+void AudioEngine::applySession(const EngineMessage& m) noexcept {
+    const double now = transport_.positionBeat();
+    const bool playing = transport_.playing();
+    auto flush = [this](NodeUid uid, int off) { midiScheduler_.flushTrack(uid, off); };
+    switch (static_cast<SessionOp>(m.op)) {
+        case SessionOp::LaunchClip:
+            // Launch while stopped activates immediately AND starts the
+            // transport (the researched Ableton rule).
+            if (sessionPlayer_.launch(m.nodeUid, m.b, now, playing, barBeats()))
+                transport_.play();
+            break;
+        case SessionOp::StopSlot:
+            sessionPlayer_.stopSlot(m.nodeUid, now, playing, barBeats());
+            break;
+        case SessionOp::ReturnTrack:
+            sessionPlayer_.returnTrack(m.nodeUid, 0, flush);
+            break;
+        case SessionOp::ReturnAll:
+            sessionPlayer_.returnAll(0, flush);
+            break;
+        case SessionOp::SetLaunchQuantum:
+            if (m.a <= static_cast<uint32_t>(SessionPlayer::QuantumMode::FixedBeats))
+                sessionPlayer_.setQuantum(
+                    static_cast<SessionPlayer::QuantumMode>(m.a), m.v0);
+            break;
+    }
+}
+
 void AudioEngine::drainEvents(EventRing<>& ring) noexcept {
     EngineMessage m;
     for (int i = 0; i < kEventDrainCap && ring.tryPop(m); ++i) {
@@ -71,13 +105,17 @@ void AudioEngine::drainEvents(EventRing<>& ring) noexcept {
                 applyTransport(m);
                 break;
             case MsgFamily::Note:
-                // No instruments yet (M4): consume and count. ONs and OFFs are
-                // dropped symmetrically, so no reservation imbalance builds up.
+                // Live-input notes route to instrument VoiceInterfaces with
+                // the onscreen-input milestone; until then consume + count.
+                // ONs and OFFs drop symmetrically - no reservation imbalance.
                 droppedNotes_.fetch_add(1, std::memory_order_relaxed);
                 break;
             case MsgFamily::System:
                 if (static_cast<SystemOp>(m.op) == SystemOp::Panic)
                     panics_.fetch_add(1, std::memory_order_relaxed);
+                break;
+            case MsgFamily::Session:
+                applySession(m);
                 break;
             case MsgFamily::Param:      // BlockSet buffers arrive with the graph (M2)
             case MsgFamily::Structure:
@@ -128,6 +166,7 @@ void AudioEngine::render(float* const* outputs, int numFrames,
         timeline_ = ts;
         if (retired != nullptr) timelineOffer_.ackRetired(retired->epoch);
         midiScheduler_.onTimelineSwap(timeline_);
+        sessionPlayer_.pruneAgainst(timeline_);   // stale uids never pin rows
     }
 
     // 3) Drain producer channels (bounded work per slice). Param moves
@@ -144,14 +183,54 @@ void AudioEngine::render(float* const* outputs, int numFrames,
     midiParams_.drainDirty(applyParam);
 
     // 4) Advance the transport (claims offered tempo bases, splits at loop
-    //    wraps) and schedule MIDI per span; events feed instruments at M4.
+    //    wraps) and schedule MIDI per span. Each span is further split at
+    //    session launch boundaries so activations are sample-exact: the
+    //    SessionPlayer activates due pendings at every (sub-)span start,
+    //    cutting the outgoing source's notes, and the scheduler consults it
+    //    per track (session-owned lanes play their launched clip instead of
+    //    the arrangement). Wrapped spans first re-anchor unreachable
+    //    boundaries to the wrap point. If the split guard runs out, the
+    //    leftovers activate at the next block start (bounded lateness).
     TransportSpan spans[2];
     const int spanCount = transport_.advance(numFrames, spans);
+    const bool playing = transport_.playing();
+    auto flushTrack = [this](NodeUid uid, int off) {
+        midiScheduler_.flushTrack(uid, off);
+    };
     for (int s = 0; s < spanCount; ++s) {
-        midiScheduler_.scheduleSpan(timeline_, spans[s],
-                                    transport_.tempoMap(), transport_.playing());
-        metronome_.scheduleSpan(spans[s], transport_.tempoMap(),
-                                transport_.playing(), transport_.metronome());
+        TransportSpan rest = spans[s];
+        if (playing && rest.wrapped) sessionPlayer_.onLoopWrap(rest.startBeat);
+        for (int cuts = 0; playing && cuts < SessionPlayer::kMaxSplitsPerSpan; ++cuts) {
+            sessionPlayer_.activateDueAt(rest.startBeat, rest.offsetFrames,
+                                         playing, flushTrack);
+            const double cut =
+                sessionPlayer_.nextBoundaryWithin(rest.startBeat, rest.endBeat);
+            if (cut >= rest.endBeat) break;
+            const int64_t cutSample = transport_.tempoMap().sampleAt(cut);
+            const int headFrames = static_cast<int>(cutSample - rest.startSample);
+            if (headFrames <= 0) {
+                // Sub-sample-early boundary: activate at the current offset.
+                sessionPlayer_.activateDueAt(cut, rest.offsetFrames, playing, flushTrack);
+                continue;
+            }
+            if (headFrames >= rest.frames) break;   // lands in the next span/block
+            TransportSpan head = rest;
+            head.endBeat = cut;
+            head.frames = headFrames;
+            midiScheduler_.scheduleSpan(timeline_, head, transport_.tempoMap(),
+                                        playing, &sessionPlayer_);
+            metronome_.scheduleSpan(head, transport_.tempoMap(), playing,
+                                    transport_.metronome());
+            rest.startSample += headFrames;
+            rest.startBeat = cut;
+            rest.offsetFrames += headFrames;
+            rest.frames -= headFrames;
+            rest.wrapped = false;
+        }
+        midiScheduler_.scheduleSpan(timeline_, rest, transport_.tempoMap(),
+                                    playing, &sessionPlayer_);
+        metronome_.scheduleSpan(rest, transport_.tempoMap(), playing,
+                                transport_.metronome());
     }
     midiScheduler_.finalizeBlock();   // one sorted run per track for the graph
 

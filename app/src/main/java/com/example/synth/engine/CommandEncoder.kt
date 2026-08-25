@@ -115,6 +115,27 @@ class CommandEncoder(
         enqueue(message(WireProtocol.FAMILY_NOTE, WireProtocol.NOTE_ALL_NOTES_OFF,
             nodeUid = nodeUid))
 
+    // ---- session launch (contracts v1.1; quantization happens engine-side) --
+
+    fun launchClip(trackUid: Long, clipUid: Long, slotIndex: Int = -1) =
+        enqueue(message(WireProtocol.FAMILY_SESSION, WireProtocol.SESSION_LAUNCH_CLIP,
+            nodeUid = trackUid, a = slotIndex, b = clipUid))
+
+    fun stopSlot(trackUid: Long) =
+        enqueue(message(WireProtocol.FAMILY_SESSION, WireProtocol.SESSION_STOP_SLOT,
+            nodeUid = trackUid))
+
+    fun returnTrackToArrangement(trackUid: Long) =
+        enqueue(message(WireProtocol.FAMILY_SESSION, WireProtocol.SESSION_RETURN_TRACK,
+            nodeUid = trackUid))
+
+    fun returnAllToArrangement() =
+        enqueue(message(WireProtocol.FAMILY_SESSION, WireProtocol.SESSION_RETURN_ALL))
+
+    fun setLaunchQuantum(mode: Int, beats: Double = 0.0) =
+        enqueue(message(WireProtocol.FAMILY_SESSION,
+            WireProtocol.SESSION_SET_LAUNCH_QUANTUM, a = mode, v0 = beats))
+
     /** Front-of-queue: outruns everything already pending. */
     fun panic() {
         pending.addFirst(message(WireProtocol.FAMILY_SYSTEM, WireProtocol.SYSTEM_PANIC))

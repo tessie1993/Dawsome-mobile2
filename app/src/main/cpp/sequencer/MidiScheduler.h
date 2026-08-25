@@ -7,6 +7,7 @@
 #include "../core/EngineConfig.h"
 #include "../core/FixedVector.h"
 #include "../core/MidiEvent.h"
+#include "SessionPlayer.h"
 #include "TempoMap.h"
 #include "TimelineSnapshot.h"
 #include "TransportEngine.h"
@@ -45,6 +46,7 @@ public:
     static constexpr int kEventCap    = 2048;
     static constexpr int kSoundingCap = 512;
     static constexpr int kSegmentCap  = kMaxTracks * 6;
+    static constexpr double kNoPlacementEnd = 1e18;   // session clips: no cut
 
     // ---- per block [RT] -----------------------------------------------------
 
@@ -70,8 +72,13 @@ public:
         closeRange(rangeStart);
     }
 
+    // `session` (optional) is the track playback arbiter: a session-owned
+    // track schedules its active session clip (looping from the launch
+    // anchor) and its arrangement clips stay silent (spec: overrides only
+    // its own track).
     void scheduleSpan(const TimelineSnapshot* timeline, const TransportSpan& span,
-                      const TempoMap& map, bool playing) noexcept {
+                      const TempoMap& map, bool playing,
+                      const SessionPlayer* session = nullptr) noexcept {
         const size_t rangeStart = pool_.size();
 
         if (!playing) {
@@ -89,7 +96,23 @@ public:
 
         if (span.endBeat > span.startBeat) {
             scheduleOffs(span, map);
-            if (timeline != nullptr) scheduleOns(*timeline, span, map);
+            if (timeline != nullptr) scheduleOns(*timeline, span, map, session);
+        }
+        closeRange(rangeStart);
+    }
+
+    // Cut one track's sounding notes at the given block offset - the
+    // SessionPlayer's source-switch cut (launch/stop/return boundaries).
+    void flushTrack(NodeUid trackUid, int sampleOffset) noexcept {
+        const size_t rangeStart = pool_.size();
+        for (size_t i = 0; i < sounding_.size();) {
+            if (sounding_[i].trackUid != trackUid) {
+                ++i;
+                continue;
+            }
+            emitOff(sounding_[i], sampleOffset);
+            ++scheduledOffs_;
+            sounding_.eraseUnordered(i);
         }
         closeRange(rangeStart);
     }
@@ -160,15 +183,22 @@ private:
     static bool noteAlive(const TimelineSnapshot* t, const Sounding& s) noexcept {
         if (t == nullptr) return false;
         for (const TrackTimeline& track : t->tracks) {
-            for (uint32_t c = 0; c < track.clipCount; ++c) {
-                const ClipView& clip = track.clips[c];
-                if (clip.clipUid != s.clipUid) continue;
-                for (uint32_t n = 0; n < clip.noteCount; ++n)
-                    if (clip.notes[n].id == s.contentId) return true;
-                return false;      // clip found, note gone
-            }
+            for (uint32_t c = 0; c < track.clipCount; ++c)
+                if (const int r = noteInClip(track.clips[c], s); r >= 0)
+                    return r == 1;
+            for (uint32_t c = 0; c < track.sessionClipCount; ++c)
+                if (const int r = noteInClip(track.sessionClips[c], s); r >= 0)
+                    return r == 1;
         }
         return false;              // clip gone
+    }
+
+    // -1 = not this clip, 0 = clip found but note gone, 1 = alive.
+    static int noteInClip(const ClipView& clip, const Sounding& s) noexcept {
+        if (clip.clipUid != s.clipUid) return -1;
+        for (uint32_t n = 0; n < clip.noteCount; ++n)
+            if (clip.notes[n].id == s.contentId) return 1;
+        return 0;
     }
 
     static int32_t offsetFor(int64_t absSample, const TransportSpan& span) noexcept {
@@ -192,8 +222,16 @@ private:
     }
 
     void scheduleOns(const TimelineSnapshot& timeline, const TransportSpan& span,
-                     const TempoMap& map) noexcept {
+                     const TempoMap& map, const SessionPlayer* session) noexcept {
         for (const TrackTimeline& track : timeline.tracks) {
+            if (session != nullptr) {
+                const SessionSource src = session->sourceFor(track.trackUid);
+                if (src.owned) {
+                    if (src.clipUid != 0)
+                        scheduleSessionClip(track, src, span, map);
+                    continue;              // arrangement silenced on this track
+                }
+            }
             for (uint32_t c = 0; c < track.clipCount; ++c) {
                 const ClipView& clip = track.clips[c];
                 if (clip.startBeat >= span.endBeat) break;   // sorted by placement
@@ -229,6 +267,34 @@ private:
                     }
                 }
             }
+        }
+    }
+
+    // A launched session clip: loops from the SessionPlayer's anchor until
+    // stopped - clip-local position is (beat - anchor) mod contentLength,
+    // stateless like the arrangement path. Passes may be NEGATIVE after a
+    // seek behind the anchor (phase extends backwards); the pass hash keeps
+    // instance ids distinct either way. No placement end exists, so note
+    // tails are never placement-cut (loop-crossing notes sustain, matching
+    // the arrangement looping rule).
+    void scheduleSessionClip(const TrackTimeline& track, const SessionSource& src,
+                             const TransportSpan& span, const TempoMap& map) noexcept {
+        const ClipView* clip = track.sessionClipByUid(src.clipUid);
+        if (clip == nullptr) return;                     // seam-4 skew: next swap
+        const double len =
+            clip->contentLengthBeats > 0.0 ? clip->contentLengthBeats : 4.0;
+        const double localFrom = span.startBeat - src.anchorBeat;
+        const double localTo = span.endBeat - src.anchorBeat;
+        if (localTo <= localFrom) return;
+
+        int64_t pass = static_cast<int64_t>(std::floor(localFrom / len));
+        for (; static_cast<double>(pass) * len < localTo; ++pass) {
+            const double passStart = static_cast<double>(pass) * len;
+            const double pf = localFrom > passStart ? localFrom - passStart : 0.0;
+            const double pt = (localTo - passStart) < len ? (localTo - passStart) : len;
+            if (pt <= pf) continue;
+            scheduleWindow(track, *clip, pf, pt, src.anchorBeat + passStart,
+                           pass, kNoPlacementEnd, span, map);
         }
     }
 

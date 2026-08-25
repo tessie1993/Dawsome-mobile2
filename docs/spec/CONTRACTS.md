@@ -1,4 +1,8 @@
-# Dawsome Seam Contracts — v1.0.0
+# Dawsome Seam Contracts — v1.1.0
+
+> v1.1.0 (M4 SessionPlayer): seam 2 gains the append-only `Session` message
+> family (launch/stop/return/quantum ops). Vocabulary addition only — no
+> layout change, `kMessageVersion` stays 1.
 
 Frozen interface contracts for the six seams every class codes against while
 the project builds without a compiler (`ARCHITECTURE_BLUEPRINT.md` §10).
@@ -97,7 +101,16 @@ never cross any thread boundary.**
 ```cpp
 namespace daw {
 
-enum class MsgFamily : uint8_t { Transport, Param, Note, Structure, System };
+enum class MsgFamily : uint8_t { Transport, Param, Note, Structure, System,
+                                 Session /* v1.1, append-only */ };
+
+enum class SessionOp : uint8_t {        // family Session (v1.1)
+  LaunchClip = 0,   // nodeUid = trackUid, b = clipUid, a = slotIndex
+  StopSlot,         // quantized stop; the track STAYS session-owned (silent)
+  ReturnTrack,      // immediate back-to-arrangement for nodeUid's track
+  ReturnAll,        // every track back to arrangement
+  SetLaunchQuantum, // a = mode (0 none, 1 bar, 2 fixed), v0 = beats for fixed
+};
 
 struct EngineMessage {                  // exactly 64 bytes, trivially copyable
   MsgFamily family;                     // 1

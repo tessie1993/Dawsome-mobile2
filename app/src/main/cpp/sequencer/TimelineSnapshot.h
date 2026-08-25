@@ -14,11 +14,13 @@
 // builder-side and is frozen from offer() on.
 //
 // M1 scope: arrangement clip placements + note content, read through
-// pointer+count spans. Session-slot views (bounded scene window, D4) join
-// with SessionPlayer; automation lane groups and markers join with their
-// evaluators. Compiles skip placements whose track or content is missing
-// from the model - the seam-4 skew rule (skips are counted, convergence at
-// the next swap).
+// pointer+count spans. M4 adds per-track SESSION clip views (same ClipView
+// shape; placement fields idle - the SessionPlayer's anchor provides the
+// timeline position, contentLengthBeats the loop). The bounded scene
+// window (D4) narrows this list when projects grow; automation lane groups
+// and markers join with their evaluators. Compiles skip placements whose
+// track or content is missing from the model - the seam-4 skew rule (skips
+// are counted, convergence at the next swap).
 //
 // Storage discipline: all views point into flat stores owned by the same
 // snapshot; stores are sized exactly and filled BEFORE views are built, so
@@ -80,6 +82,14 @@ struct TrackTimeline {
     uint8_t trackType = 0;
     const ClipView* clips = nullptr;   // arrangement clips sorted by startBeat
     uint32_t clipCount = 0;
+    const ClipView* sessionClips = nullptr;   // session slots, slot order
+    uint32_t sessionClipCount = 0;
+
+    const ClipView* sessionClipByUid(NodeUid uid) const noexcept {
+        for (uint32_t i = 0; i < sessionClipCount; ++i)
+            if (sessionClips[i].clipUid == uid) return &sessionClips[i];
+        return nullptr;
+    }
 };
 
 struct TimelineSnapshot {

@@ -186,9 +186,23 @@ class EngineSync(
             is ProjectAction.ToggleTrackSolo -> sendTrackUpsert(state, editSeq, action.trackId)
             is ProjectAction.ToggleTrackArm -> sendTrackUpsert(state, editSeq, action.trackId)
 
-            // ---- session playback intents (SessionPlayer, M5) + UI-only ------
-            is ProjectAction.TriggerSessionClip, is ProjectAction.TriggerScene,
-            is ProjectAction.ReturnTrackToArrangement, is ProjectAction.ReturnAllToArrangement,
+            // ---- session playback intents (SessionPlayer, seam-2 Session
+            // family; quantization + arbitration are engine-side, the store's
+            // isPlaying/isOverriddenBySession flags are the optimistic UI) ----
+            is ProjectAction.TriggerSessionClip ->
+                controller.send { triggerSlotOn(this, state, action.trackId, action.slotIndex) }
+            is ProjectAction.TriggerScene -> controller.send {
+                // One flush = one engine block = every lane shares the boundary.
+                for (t in state.tracks) triggerSlotOn(this, state, t.id, action.sceneIndex)
+            }
+            is ProjectAction.ReturnTrackToArrangement -> controller.send {
+                returnTrackToArrangement(
+                    WireProtocol.makeNodeUid(WireProtocol.NODE_KIND_TRACK, action.trackId))
+            }
+            is ProjectAction.ReturnAllToArrangement ->
+                controller.send { returnAllToArrangement() }
+
+            // ---- UI-only ----------------------------------------------------
             is ProjectAction.SetScale, is ProjectAction.SelectTab,
             is ProjectAction.SelectTrack -> Unit
         }
@@ -439,6 +453,25 @@ class EngineSync(
 
     private fun contentIdOf(clipId: String, linkedId: String?): String =
         if (linkedId != null && linkedId < clipId) linkedId else clipId
+
+    /**
+     * One slot press on one track: a clip in that slot launches it; an empty
+     * slot is the stop button (the track goes/stays session-owned, silenced
+     * at the boundary) - mirrors the reducer's isPlaying marking exactly.
+     */
+    private fun triggerSlotOn(
+        enc: CommandEncoder, state: ProjectState, trackId: String, slotIndex: Int,
+    ) {
+        val track = state.tracks.firstOrNull { it.id == trackId } ?: return
+        val trackUid = WireProtocol.makeNodeUid(WireProtocol.NODE_KIND_TRACK, trackId)
+        val clip = track.sessionClips.firstOrNull { it.slotIndex == slotIndex }
+        if (clip != null) {
+            enc.launchClip(trackUid,
+                WireProtocol.makeNodeUid(WireProtocol.NODE_KIND_CLIP, clip.id), slotIndex)
+        } else {
+            enc.stopSlot(trackUid)
+        }
+    }
 
     private fun trackTypeWire(t: TrackType): Int = when (t) {
         TrackType.MIDI -> 0
