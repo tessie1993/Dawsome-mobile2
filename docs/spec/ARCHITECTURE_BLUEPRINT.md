@@ -1,4 +1,4 @@
-# Dawsome Architecture Blueprint (rev 2 — post DSP review round 1)
+# Dawsome Architecture Blueprint (rev 3 — post DSP review rounds 1–2)
 
 **Status:** authoritative target architecture for the full product defined by
 `docs/spec/SPEC_PART1_FUNCTIONAL.md` (22 functional areas) and
@@ -36,9 +36,9 @@ its files are replaced module-by-module from M0 onward.
 | # | Decision | Value | Rationale |
 |---|---|---|---|
 | D1 | Platform | Android only, minSdk 24, Kotlin + Compose UI, C++20 NDK engine | Existing repo; Oboe floor |
-| D2 | Audio I/O | Oboe output stream with callback, `PerformanceMode::LowLatency` + `SharingMode::Exclusive` (fallback shared), device-native rate; **full-duplex = input stream opened without callback, drained non-blocking inside the output callback through an InputJitterRing** (primed ~2 bursts; underfill → zeros + counter) | Oboe-recommended duplex; one clock master (output) |
+| D2 | Audio I/O | Oboe output stream with callback, `PerformanceMode::LowLatency` + `SharingMode::Exclusive` (fallback shared), device-native rate; **full-duplex = input stream opened without callback, drained non-blocking inside the output callback through an InputJitterRing** (primed ~2 bursts; underfill → zeros + counter; **overfill/clock-drift: high-water → drop-oldest + counter on the monitoring path; recording truth = the input stream's own clock — long-take duration skew vs output clock is accepted and documented, not resampled**) | Oboe-recommended duplex; one clock master (output) |
 | D3 | Internal format | float32, de-interleaved; callback `numFrames` is variable — engine sub-chunks into ≤ `maxBlock` (1024) slices; all RT capacity sized to `maxBlock` | NEON; Oboe reality |
-| D4 | Capacities | 64 user tracks, 8 groups, 8 returns, 1 master, 16 devices/chain, 8 chains/rack, rack nesting 3, 16 macros (8 primary), **global voice budget 64 enforced by VoiceBudgetLedger**, scenes unbounded in model / TimelineSnapshot carries a bounded launch window | RT pre-allocation; phone-honest |
+| D4 | Capacities | 64 user tracks, 8 groups, 8 returns, 1 master, 16 devices/chain, 8 chains/rack, rack nesting 3, 16 macros (8 primary), **global voice budget 64 enforced by VoiceBudgetLedger**, scenes unbounded in model; the RT launch window = the visible session page plus all follow-action-reachable targets, capped at 32 scenes/track | RT pre-allocation; phone-honest |
 | D5 | Rates & formats | Engine runs at device rate. Originals never resampled in place; SampleCache/proxy caches keyed by `(fileId, targetRate)`; recordings tagged with capture rate and conformed on playback (per-clip resampler) until background re-conform. Export: 44.1/48/96 kHz, 16/24-bit WAV, FLAC, AAC (MediaCodec). **MP3 export dropped** (Android has no MP3 encoder; LAME rejected: LGPL + extra .so vs D13) | Route changes are survivable; license-clean |
 | D6 | Plug-ins | No third-party plug-in hosting at launch | Scope |
 | D7 | Time-stretch | signalsmith-stretch (MIT); repitch via resampler; **RT stretch budget per device class** (§7.4) with proxy fallback | License + phone CPU |
@@ -68,10 +68,13 @@ Every change is classified:
    realtime message paths (§2.2), no rebuild.
 2. **Timeline-shaped** (note add/move/delete, automation & envelope points,
    step edits, warp-marker edits, clip gain/fades, groove amount) → background
-   rebuild of the affected clip's `TimelineSnapshot` only, atomic per-clip
-   pointer swap, epoch GC (§2.4). `MidiClipPlayer` keeps a sounding-note table
-   and reconciles at swap: notes whose note-off vanished get synthetic offs —
-   no stuck notes when editing a playing clip.
+   rebuild of only the affected **snapshot unit**, atomic pointer swap, epoch
+   GC (§2.4). Snapshot units, each independently epoch-swapped: **per-clip
+   content** (notes/steps/envelopes/warp), **per-track automation lane group**
+   (what AutomationEvaluator iterates — track automation belongs to tracks,
+   not clips), and the **marker/tempo lists**. `MidiClipPlayer` keeps a
+   sounding-note table and reconciles at swap: notes whose note-off vanished
+   get synthetic offs — no stuck notes when editing a playing clip.
 3. **Structure-shaped** (add/remove/reorder tracks, devices, chains, zones,
    routing, sends, sidechain edges, rack topology, warp-mode switch, complex
    tempo-map edits) → full graph rebuild + swap (§2.3).
@@ -86,19 +89,30 @@ per-ring drain caps:
 - **MIDI ring** (MIDI I/O thread producer): timestamped device events; MIDI-learn
   mappings are resolved on the MIDI thread (map hit → param move or note event)
   so learned CCs never round-trip through Kotlin.
-- **Builder ring** (GraphBuilder producer): swap offers, snapshot swap offers.
+- **Builder path** (GraphBuilder producer): **single-slot offers** (graph swap,
+  snapshot swap) — a newer unclaimed offer replaces the older one, which is GC'd.
 
 Two message species with different loss semantics:
 
 - **Param moves** are not queued — they land in the **ParamMoveTable**: a fixed
-  open-addressing table keyed by ParamId, latest-wins, plus a dirty list the RT
-  thread consumes. Coalescing by construction; overflow of the table (rare burst
-  beyond capacity 256/block) drops oldest *cosmetic* moves and counts it.
-- **Events** (note on/off, transport, panic, snapshot/graph offers) ride a
-  **lossless ring** sized for worst-case bursts (4096); producer-side high-water
-  → reject + `Panic` event → RT executes all-notes-off. A note-on without its
-  note-off is never silently possible: note events are enqueued as pairs of
-  guaranteed slots or refused atomically.
+  open-addressing table, latest-wins per key, plus a dirty list the RT thread
+  consumes. **Messages and the table carry stable identity only —
+  `(NodeUid, semanticKeyHash)` — never graph indices.** The RT thread resolves
+  identity → dense index through the *currently installed* graph's resolver
+  table at apply time (one hash lookup per applied move, ≤ table capacity per
+  block); unresolvable keys are skipped and counted. Producers (Kotlin encoder,
+  MIDI thread) never need a resolver copy, and post-swap re-application is
+  always index-correct by construction.
+  **Overflow reconciles, never silently evicts:** if a block exceeds table
+  capacity (256 distinct params), evicted keys raise a reconcile flag and
+  EngineSync re-sends their current model values. **Bulk sets** (preset load,
+  variation recall: 20–200 params) travel as one atomic param-block event
+  applied under a table generation barrier, not as individual moves.
+- **Events** (note on/off, transport, panic) ride a **lossless ring** sized for
+  worst-case bursts (4096); producer-side high-water → reject + `Panic` event →
+  RT executes all-notes-off. A note-on without its note-off is never silently
+  possible: note events are enqueued as pairs of guaranteed slots or refused
+  atomically.
 
 **Ordering rule (editSeq):** every compiled graph/snapshot is stamped with the
 editSeq it was built from. RT applies incoming messages immediately; after a
@@ -112,15 +126,16 @@ values across — a fader ridden during a rebuild never jumps.
   model, updated from StateCodec deltas on the builder thread only). On dirty:
   compile a new `PlaybackGraph` — topological node schedule, buffers from
   `AudioBufferPool`, PDC delays, param indices resolved from semantic keys
-  (§6) — plus a **MigrationPlan**: for each new node, `{newNode, oldNode|null,
-  op}` where `op = adopt` iff NodeUid matches **and** configHash matches (same
-  DSP topology-relevant config) **and** rate/maxBlock unchanged; else
-  `reset-with-fade` (short fade-in to mask the reset).
+  (§6) — plus a **MigrationPlan containing adopt entries only**: `{newNode,
+  oldNode}` pairs where NodeUid matches **and** configHash matches (same DSP
+  topology-relevant config) **and** rate/maxBlock unchanged. Fresh nodes and
+  reset-with-fade state (config changed → short fade-in masks the reset) are
+  fully pre-installed by the builder off-thread — RT never touches them at swap.
 - **Swap (RT side):** callback sees a pending offer, at block boundary walks the
-  MigrationPlan executing **pointer/POD moves only** (state blocks are
-  self-contained; O(nodes), bounded by D4 caps — no copies, no allocation),
-  installs the new graph, publishes **epoch ack** (release-store of the retired
-  graph's epoch).
+  adopt list executing **pointer/POD moves only** (state blocks are
+  self-contained; bounded by the retired graph's node count — no copies, no
+  allocation), installs the new graph, publishes **epoch ack** (release-store of
+  the retired graph's epoch).
 - **GC:** builder frees a retired graph only after observing its epoch ack.
   The audio thread never frees memory.
 - **NodeState blocks** are POD or hold only refcounted `SampleHandle`s from
@@ -154,13 +169,22 @@ bounded work per block; variable `numFrames` sub-chunked to ≤ maxBlock.
 - **TimeAnchor**: each callback publishes `{framePosition, monotonicNanos}`
   atomically (from Oboe stream timestamps). All cross-domain conversion —
   MIDI-in event times, Link phase, recording placement — goes through it.
-- **TempoMap**: beat↔sample conversion (tempo + time-sig events). Simple tempo
-  events (set BPM, nudge, scene tempo at quantized launch) are **RT-applied via
-  command** into an RT-editable tail segment; complex map edits (tempo
-  automation curves, insert/delete events mid-song) are structure-shaped
-  rebuilds. Launch quantization always resolves against the map the RT thread
-  currently holds — a quantized scene launch with a tempo change is computed
-  RT-side, never against a stale async copy.
+- **TempoMap**: beat↔sample conversion (tempo + time-sig events), built as an
+  **immutable base segment** (compiled offline, swapped via the same epoch
+  offer/ack machinery on structure-shaped edits) plus a **fixed-capacity RT
+  tail array published through a seqlock (version counter)**: the audio thread
+  appends simple tempo events (set BPM, nudge, scene tempo at quantized launch)
+  bumping `tempoMapRev` on every append and every base swap; background readers
+  (DiskStreamer prefetch, StretchPrewarmer, workers, the Kotlin mirror) take a
+  coherent snapshot with seqlock retry and **stamp everything they produce with
+  the `tempoMapRev` they read** — stale prefetches/proxies are detectable and
+  re-issued, and no reader ever takes a lock the RT thread can block on.
+  Precedence: the tail supersedes the base from its first event's position
+  until the next structure-shaped map rebuild consolidates it; a full tail
+  forces that consolidation. Complex edits (tempo automation curves,
+  insert/delete mid-song) are always structure-shaped base rebuilds. Launch
+  quantization resolves against the map the RT thread currently holds — never
+  a stale async copy.
 - **TimebaseSource** abstraction inside TransportEngine from day one:
   `Internal | AbletonLink | MidiClockSlave` (PLL chase for external clock in).
   Tempo authority rule: when Link or clock-slave is active, tempo automation is
@@ -175,8 +199,9 @@ bounded work per block; variable `numFrames` sub-chunked to ≤ maxBlock.
 - **CpuLoadMonitor** attributes cost per node (per-block cycle sampling of the
   schedule) so "the expensive device" is nameable (spec P2 §15.4), feeding the
   **DegradationGovernor** ladder: shrink voice budget → force Eco quality on
-  flagged devices → demote RT stretchers to proxies → prompt freeze. All
-  actuation is ordinary commands; audio never just stops.
+  flagged devices → demote RT stretchers to proxies (keep-until-ready per
+  §7.4) → prompt freeze. All actuation is ordinary commands; audio never just
+  stops.
 
 ---
 
@@ -270,8 +295,8 @@ C++     jni → engine → {graph, sequencer, media, timestretch} → device →
 | `device/midi_effects/` | RtArpeggiator, RtChord, RtNoteLength, RtPitch, RtRandom, RtScale, RtVelocity, RtCcControl, RtNoteEcho, RtExpressionControl, RtMidiLfo — MidiEffectNode base with ActiveNoteRegistry (bypass/reorder/stop safe) + MidiActivityBus taps |
 | `device/racks/` | RackDevice (Instr/Audio/MidiFx), RackChain (zones: key/velocity/selector/**frequency band** via LR crossovers; crossfaded), MacroTable, VariationStore (snapshots, morph), ChainMixer |
 | `graph/` | AudioGraph (compiled schedule), TrackNode/GroupTrackNode/ReturnTrackNode/MasterNode, TrackStrip (conventions §3.4, crossfader assign, cue sends), SendNode/SendCollector, SidechainTap, RoutingTable (cycle-refusing), DelayCompNode, PdcCalculator, OutputBusMatrix, MeterProbe, GraphBuilder, MigrationPlan, NodeStateRegistry, EpochGc use, VoiceBudgetLedger |
-| `sequencer/` | TransportEngine (TimebaseSource: internal/Link/clock-slave), TempoMap (RT tail edits + offline rebuilds), TimelineSnapshot (per-clip, epoch-swapped; bounded scene window), ArrangementPlayer, SessionPlayer (launch modes/legato/quant), **SessionRecorder** (record into slots: quantized start/stop, auto-loop on stop, overdub/replace), TrackPlaybackArbiter, FollowActionScheduler, LaunchQuantizer, MidiClipPlayer (sounding-note table, comp-region lists, MPE, probability/deviation with **seeded RtRandom: deterministic per clip+position for render parity**), AudioClipPlayer (region lists, warp/repitch, groove micro-offsets applied to beat→sample mapping, ring-underrun → silence+event), StepSequencerCore, GrooveEngine, MidiScheduler, MetronomeNode (bus-routable), PunchController, CaptureBuffer, ArrangementRecorder, AutomationEvaluator (active-lane iteration only), ClipEnvelopeEvaluator, ModulationEngine, ParameterResolver |
-| `media/` | AudioFileDecoder (dr_wav/flac/mp3 decode + MediaCodec AAC), AudioFileWriter (WAV, FLAC, AAC), SampleCache (budgeted, `(fileId, rate)` keys, refcounted SampleHandles), DiskStreamRing, PrefetchPlanner, RecordingWriter (journaled, storage guard), PeakFileBuilder, AnalysisService (transients/tempo/key/pitch), SliceEngine, **SampleCaptureService** (record-into-pad/sampler flow off ResampleTap or input, distinct from track recording), **MediaGc** (reachability = undo stack ∪ versions ∪ takes ∪ journal; only unreachable files deleted) |
+| `sequencer/` | TransportEngine (TimebaseSource: internal/Link/clock-slave), TempoMap (RT tail edits + offline rebuilds), TimelineSnapshot (per snapshot unit — clip content / track lane group / marker+tempo lists — epoch-swapped; bounded scene window per D4), ArrangementPlayer, SessionPlayer (launch modes/legato/quant), **SessionRecorder** (record into slots: quantized start/stop, auto-loop on stop, overdub/replace), TrackPlaybackArbiter, FollowActionScheduler (resolves targets — including random choices — at least one quantization period early and feeds PrefetchPlanner, so disk-streamed follow targets never start silent), LaunchQuantizer, MidiClipPlayer (sounding-note table, comp-region lists, MPE, probability/deviation with **seeded RtRandom keyed `(clipId, position, loopPassIndex)` — passes differ musically, offline render replays the same pass indices for parity**), AudioClipPlayer (region lists, warp/repitch, groove micro-offsets applied to beat→sample mapping, ring-underrun → silence+event), StepSequencerCore, GrooveEngine, MidiScheduler, MetronomeNode (bus-routable), PunchController, CaptureBuffer, ArrangementRecorder, AutomationEvaluator (active-lane iteration only), ClipEnvelopeEvaluator, ModulationEngine, ParameterResolver |
+| `media/` | AudioFileDecoder (dr_wav/flac/mp3 decode + MediaCodec AAC), AudioFileWriter (WAV, FLAC, AAC), SampleCache (budgeted, `(fileId, rate)` keys, refcounted SampleHandles), DiskStreamRing, PrefetchPlanner, RecordingWriter (journaled, storage guard), PeakFileBuilder, AnalysisService (transients/tempo/key/pitch), SliceEngine, **SampleCaptureService** (record-into-pad/sampler flow off ResampleTap or input, distinct from track recording) |
 | `timestretch/` | WarpEngine (budgeted stretcher pool), WarpMap, RepitchPlayhead, StretchPrewarmer (proxies keyed `(tempoMapRev, warpMapRev, rate)`, invalidated on either edit; pre-roll on seek/armed launches via PrefetchPlanner) |
 | `engine/` | AudioEngine, OboeDriver (output-driven duplex per D2, per-stream latency reports, route/rate-change re-prepare sequence per D5), SyncAdapter (Link RT capture/commit; MIDI clock in/out), EngineModel, OfflineRenderEngine (deterministic seeds; tails; stems matrix; **realtime-capture mode for ExternalInstrumentDevice tracks**), FreezeEngine, ResampleTap, CpuLoadMonitor (per-node attribution), DegradationGovernor, PanicController |
 | `jni/` | NativeAudioBridge, CommandCodec + StateCodec (versioned wire formats §10), CallbackDispatcher (never from RT) |
@@ -284,7 +309,7 @@ C++     jni → engine → {graph, sequencer, media, timestretch} → device →
 | `domain/store/` | ProjectStore (+editSeq stamping), ProjectAction families, UndoManager (gesture transactions, coalescing, bounded), SelectionModel (survives context switches) |
 | `domain/midi/` | MidiTransformOps (15 transformations), MidiGeneratorOps (7 generators), StepEditOps (fill N/rotate/randomize) — pure functions, preview-commit contract |
 | `engine/` | EngineController (lifecycle, foreground service, focus/route policy, interruption finalize-recording), EngineSync (diff → messages/deltas + change classification), EngineReadback (buses → flows; must-deliver reconciliation), CommandEncoder, EnginePrefs (buffer size, calibration) |
-| `data/` | ProjectRepositoryV2 (project dir: project.json + media/ + peaks/ + takes/), ProjectSerializer (versioned migrations), AutosaveJournal (**ops log versioned by schema; on mismatch recover from snapshot, discard tail**), VersionStore, CrashRecovery (journal replay + recording scan), DawDatabase/Room (project + MediaLibrary index incl. **MIDI patterns**, tags, favorites, recents), PackManager, MissingFileResolver, ProjectArchiver, ImportService |
+| `data/` | ProjectRepositoryV2 (project dir: project.json + media/ + peaks/ + takes/), ProjectSerializer (versioned migrations), AutosaveJournal (**ops log versioned by schema; on mismatch recover from snapshot, discard tail**), VersionStore, CrashRecovery (journal replay + recording scan), DawDatabase/Room (project + MediaLibrary index incl. **MIDI patterns**, tags, favorites, recents), PackManager, MissingFileResolver, ProjectArchiver, ImportService, **MediaGc** (Kotlin-side — reachability = undo stack ∪ versions ∪ takes ∪ autosave journal, all edit-model concepts; only unreachable media files are ever deleted) |
 | `services/` | ExportService (mix/stems/tracks/groups/loop/MIDI; WAV/FLAC/AAC; dither; normalize; tails; loudness targets), MidiDeviceService (USB/BLE; **MidiLearnMap targets: params, macros, mixer, clip/scene launch, transport**), AudioDeviceService (device/bus mapping, cue availability), SyncService (thin UI over SyncAdapter), RenderJobQueue |
 | `ui/state/` | Existing 8 + ClipEditorStateHolder, AudioEditorStateHolder, DeviceDetailStateHolder (A/B, presets), AutomationStateHolder (read/write/touch/latch, override/return), TakeCompStateHolder, PerformanceStateHolder (macros, crossfader, momentary FX, edit lock), InputSurfaceStateHolder (keyboard/pads/chords/fretboard/step, scale lock, MPE, note repeat), BrowserStateHolder v2 (preview via PreviewPlayer), SettingsStateHolder, ProjectHubStateHolder |
 | `ui/screens/earth/` + `ui/components/earth/` | Existing + ClipEditorScreen, AudioEditorScreen, DeviceDetailScreen, TakeLanesScreen, PerformanceScreen, InputSurfaceScreen, SettingsScreen, ProjectHubScreen; components: WaveformView, PianoRollGrid, StepGrid, AutomationLaneView, EnvelopeEditor, XYMorphPad, MacroKnobRow, TakeLaneRow, SpectrumView, LoudnessMeterView, Keyboard/PadGrid/ChordPad views, ValueSlider (coarse/fine/numeric/reset) — Earth.Design V2 morphic glass |
@@ -306,8 +331,10 @@ recording them as automation is free.
   (hashed) declared in ParamDescriptor. AutomationLane, ClipEnvelope,
   ModulationAssignment, MacroTable, MidiLearnMap all reference keys.
 - GraphBuilder resolves keys → dense indices at compile time; indices exist
-  only inside a compiled graph (ParamMoveTable ships resolved indices; the
-  resolver table travels with the graph).
+  only inside a compiled graph as a builder-internal artifact. All messages and
+  the ParamMoveTable carry stable `(NodeUid, semanticKeyHash)` identity; the RT
+  thread resolves through the installed graph's resolver table at apply time
+  (§2.2) — no producer ever holds indices.
 - Device replacement uses a declared **remap table** (per device-type pair) so
   compatible automation/mappings survive replace (P2 §4, §11.1); unmapped
   lanes are kept, flagged orphaned, never silently deleted.
@@ -319,7 +346,7 @@ recording them as automation is free.
 | Cache | 3 GB device | 6 GB | 8 GB+ |
 |---|---|---|---|
 | SampleCache resident | 256 MB | 512 MB | 768 MB |
-| Stream rings | 24 × 2 s stereo (~8 MB) | 32 × 2 s | 48 × 2 s |
+| Stream rings (2 s stereo float32 @48 kHz ≈ 0.77 MB each) | 24 (~18 MB) | 32 (~25 MB) | 48 (~37 MB) |
 | Prewarm/proxy cache (disk-backed, RAM window) | 64 MB | 128 MB | 192 MB |
 | Peak-file cache | 32 MB | 64 MB | 96 MB |
 
@@ -342,7 +369,13 @@ resamplers until background re-conform jobs complete. UX state exposed.
 
 N concurrent RT stretchers by device class (baseline 8 stereo mid-range,
 measured in M7); beyond N: prewarmed proxy or repitch fallback with UI flag.
-Proxies invalidate on tempo-map or warp-map revision change.
+Proxies invalidate on tempo-map or warp-map revision change — but a live
+tempo event never causes an audible cliff: **a stale proxy keeps playing
+through a cheap corrective stretcher at ratio oldTempo/newTempo (≈1.0)**
+while the worker pool re-renders against the new `tempoMapRev`; the same
+keep-until-ready rule governs DegradationGovernor stretcher demotion (RT
+stretcher runs until its proxy exists). This corrective path is part of the
+WarpEngine/AudioClipPlayer interface from M6–M7, not a retrofit.
 
 ## 8. Linked clips, takes, capture
 
@@ -421,11 +454,17 @@ version fields). Contracts change only by editing that file first. Scope:
    descriptor(i)`, `saveState/loadState(NodeState&)`, RT-safety annotations.
 2. **EngineCommand / message layout**: fixed 64-byte POD, `int64` sample
    positions, `double` beats, editSeq field, enumerated op codes per family;
-   EventRing paired-slot rule for note on/off.
+   param addressing always `(NodeUid, semanticKeyHash)` — indices never cross
+   the wire; EventRing paired-slot rule for note on/off; param-block event
+   framing for atomic bulk sets.
 3. **NodeState block**: header {NodeUid, ConfigHash, size, version}, POD body,
    SampleHandle refcount rules, adopt-vs-reset criteria.
-4. **TimelineSnapshot read API**: per-clip iterators (notes, steps, envelope
-   segments, warp segments), bounded window guarantees, epoch/swap rules.
+4. **TimelineSnapshot read API**: iterators per snapshot unit — clip content
+   (notes, steps, envelope segments, warp segments), **per-track automation
+   lane groups**, marker/tempo lists — bounded window guarantees, epoch/swap
+   rules, and the **editSeq skew-tolerance rule**: graph@N with snapshot@M may
+   transiently disagree; RT skips unresolvable references silently, counts
+   them, and converges on the next swap — never a cross-swap barrier.
 5. **JNI wire formats**: CommandCodec + StateCodec framing, both with explicit
    format-version fields from day one.
 6. **ParamId & ParamDescriptor**: semantic key hashing, descriptor fields
@@ -448,12 +487,14 @@ target exists from M0; runs only when the user asks).
   family, strips (conventions), sends/returns/groups, RoutingTable, PDC,
   OutputBusMatrix (Main+Cue), meters; MixerScreen wiring.
 - **M3 Device platform:** DeviceNode + chains, ParamRegistry/Resolver (semantic
-  keys), VoiceAllocator + VoiceBudgetLedger, presets, racks/macros/modulation
-  core, QualityMode.
+  keys), VoiceAllocator + VoiceBudgetLedger (steal order: releasing → oldest →
+  quietest; protect most-recent notes and drum transients), presets,
+  racks/macros/modulation core, QualityMode.
 - **M4 First sound:** SubtractiveSynth + MidiClipPlayer + SessionPlayer
   (launch minimal) + MetronomeNode. Then WavetableSynth, FmSynth.
 - **M5 Drums & sampling** (pulls forward decode + resident SampleCache +
-  PreviewPlayer basics — the M6 streaming tier stays put): DrumRack,
+  PreviewPlayer plain audition — tempo-synced/key-shifted preview arrives with
+  the M7 stretcher pool; the M6 streaming tier stays put): DrumRack,
   DrumPadSampler, StepSequencerCore, SimpleSampler, SliceEngine,
   SampleCaptureService. *(Scenario 16.1.)*
 - **M6 Audio tracks & recording:** DiskStreamRing/PrefetchPlanner tier,
