@@ -11,6 +11,7 @@
 #include "../core/Seqlock.h"
 #include "../core/SpscRing.h"
 #include "../core/TimeAnchor.h"
+#include "../graph/PlaybackGraph.h"
 #include "../sequencer/MidiScheduler.h"
 #include "../sequencer/TimelineSnapshot.h"
 #include "../sequencer/TransportEngine.h"
@@ -75,8 +76,11 @@ public:
     const TransportEngine& transport() const noexcept { return transport_; }
     TransportEngine&       transport() noexcept { return transport_; }
     GraphBuilder&          builder() noexcept { return *builder_; }
-    // Builder -> RT handover slot for compiled timelines (seam 4).
+    // Builder -> RT handover slots for compiled artifacts (seams 3/4).
     OfferSlot<TimelineSnapshot>& timelineOffer() noexcept { return timelineOffer_; }
+    OfferSlot<PlaybackGraph>&    graphOffer() noexcept { return graphOffer_; }
+    // [RT] the currently installed graph (null before the first claim).
+    const PlaybackGraph* graph() const noexcept { return graph_; }
     // [RT] the currently installed timeline (null before the first claim).
     const TimelineSnapshot* timeline() const noexcept { return timeline_; }
     // [RT] block-local scheduled MIDI (instruments consume from M4).
@@ -108,9 +112,11 @@ private:
     // The real transport (M1): TempoMap + state machine + span splitting.
     TransportEngine transport_;
 
-    // Compiled-timeline handover (builder offers, RT claims + acks).
+    // Compiled-artifact handover (builder offers, RT claims + acks).
     OfferSlot<TimelineSnapshot> timelineOffer_;
     const TimelineSnapshot* timeline_ = nullptr;   // RT-owned current pointer
+    OfferSlot<PlaybackGraph> graphOffer_;
+    PlaybackGraph* graph_ = nullptr;               // RT-owned current pointer
 
     MidiScheduler midiScheduler_;
 

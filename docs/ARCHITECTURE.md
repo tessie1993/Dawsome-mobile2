@@ -525,6 +525,82 @@ classDiagram
     TrackStrip ..> SmoothedValue
     MeterProbe ..> MeterFrame
 
+    %% ---- M2 graph/ (compiled mixer: PlaybackGraph + PDC + migration) ----
+    class SendNode {
+        <<per-(track, return-bus) post-fader tap AS a DeviceNode; DOCUMENTED semantic deviation: process() ACCUMULATES outputs += inputs * level (graph-internal, never aliased); resolver maps (trackUid, mixer.sendA/B) here so Kotlin keeps addressing sends on the track uid; smoothed level migrates>>
+        +process(ctx) accumulate
+        +setParamImmediate(0, plain)
+        +saveState(out) / loadState(in)
+        +busIndex() int
+    }
+    class DelayCompNode {
+        <<fixed integer stereo delay in place (builder-prepared DelayLines); zero delay = transparent pass>>
+        +prepare(delaySamples, maxBlock)
+        +process(l, r, numFrames)
+        +reset()
+    }
+    class PdcCalculator {
+        <<builder-side join balancing (the researched industry rule): every path into a join delayed by maxLatencyIntoJoin - ownLatency; M2 latencies are all zero so no comps insert, but the computation runs so M3 chains / M8 lookahead just work; live-input monitoring bypasses PDC by contract>>
+        +beginJoin()
+        +addPath(latencySamples) int
+        +maxLatency() int
+        +compFor(index) int
+    }
+    class MigrationEntry {
+        <<seam-3 pair: newNode + oldNode>>
+    }
+    class MigrationPlan {
+        <<ADOPT ENTRIES ONLY (uid + configHash + rate/maxBlock match); fresh/reset state pre-installed by the builder; executeAdopt [RT at swap] = bounded save->load POD moves through a pre-sized scratch, no allocation>>
+        +add(newNode, oldNode, stateBytes)
+        +finalize()
+        +executeAdopt()
+    }
+    class ParamResolver {
+        <<seam 6: key->dense resolution existing ONLY inside a compiled graph; open-addressed pow2 table built by the compiler, consulted [RT] at apply time; a miss = seam-4 skew (caller counts + skips)>>
+        +reserve(paramCount)
+        +add(uid, key, node, dense) bool
+        +apply(uid, key, plain) bool
+    }
+    class RenderFacts {
+        <<per-block facts fanned into every ProcessContext>>
+        +double sampleRate
+        +int64_t blockStartSample
+        +double blockStartBeat
+        +double bpm
+        +bool playing
+        +bool recording
+    }
+    class TrackUnit {
+        <<one mixer lane (track/return/master): arena buffer slices, strip, optional sendA/B, optional comp, meter>>
+    }
+    class PlaybackGraph {
+        <<the compiled realtime mixer artifact (epoch offer/ack): builder-allocated arena + owned nodes; M2 topology: zeroed track buffer (silence source; instruments write here from M4) -> strip -> post-fader send taps -> [comp] -> master join; returns -> strip -> join; master mix -> MasterStrip -> Main bus (Cue folds on stereo hw). processBlock [RT]: no allocation, meters collect in pendingMeters for the engine to drain. nodeIndex is builder-only (next compile's adoption scan). GRAPH ARTIFACT LIFETIME: replaced unclaimed offers are NEVER eagerly freed (MigrationPlans reference predecessors' nodes); only the acked-front GC rule releases them>>
+        +uint64_t epoch
+        +uint32_t builtFromEditSeq
+        +double sampleRate
+        +processBlock(numFrames, facts: RenderFacts)
+        +ParamResolver resolver
+        +MigrationPlan migration
+        +FixedVector~MeterFrame~ pendingMeters
+    }
+
+    DeviceNode <|-- SendNode
+    SendNode ..> SmoothedValue
+    DelayCompNode ..> DelayLine
+    MigrationPlan *-- MigrationEntry
+    MigrationPlan ..> NodeState
+    PlaybackGraph *-- TrackUnit
+    PlaybackGraph *-- ParamResolver
+    PlaybackGraph *-- MigrationPlan
+    PlaybackGraph ..> RenderFacts
+    TrackUnit *-- MeterProbe
+    TrackUnit ..> TrackStrip
+    TrackUnit ..> SendNode
+    TrackUnit ..> DelayCompNode
+    GraphBuilder ..> PlaybackGraph
+    GraphBuilder ..> PdcCalculator
+    AudioEngine ..> PlaybackGraph
+
     %% ---- M1 graph/ (GraphBuilder - the background compile thread) ----
     class GraphBuilder {
         <<owns EngineModel + the compile thread (50ms wait_for cycle): drains ModelDelta bundle inbox (mutex+condvar; single engine-io producer preserves edit order), applies deltas, rebuilds dirty artifacts - TimelineSnapshot (exact-reserve flat stores), TempoMapBase from model tempo deltas (rate-gated, retried) or forced tail consolidation (samples the SAME governing function at boundary beats; equal-tempo merges preserve post-seek discontinuities; skipped while an offer is in flight). All handovers via OfferSlot epochs; only this thread frees retired artifacts (after RT ack; tempo bg pointer republished once predecessor ack proves the claim). PlaybackGraph compile joins at M2>>

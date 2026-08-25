@@ -27,6 +27,7 @@ if(ANDROID)
         engine/EngineModel.cpp
         engine/OboeDriver.cpp
         graph/GraphBuilder.cpp
+        graph/PlaybackGraph.cpp
         jni/NativeAudioBridge.cpp
         )
     target_link_libraries(dawcore PRIVATE dawcore_core)

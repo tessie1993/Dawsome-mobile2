@@ -73,9 +73,10 @@ void GraphBuilder::threadMain() {
                 consolidateTempoTail(snap);
         }
         if (dirty & kDirtyTimeline) buildTimeline();
-        // kDirtyGraph feeds the PlaybackGraph compile at M2.
+        if ((dirty & kDirtyGraph) || pendingGraphBuild_) buildGraph();
 
         gcTimeline();
+        gcGraph();
         gcTempo();
     }
 }
@@ -227,6 +228,165 @@ void GraphBuilder::gcTimeline() {
     while (timelineArtifacts_.size() > 1 &&
            engine_.timelineOffer().retiredAcked(timelineArtifacts_.front().snapshot->epoch)) {
         timelineArtifacts_.erase(timelineArtifacts_.begin());
+    }
+}
+
+// ---- playback graph ---------------------------------------------------------
+
+void GraphBuilder::buildGraph() {
+    const double rate = engine_.transport().tempoMap().sampleRate();
+    if (rate <= 0.0) {                    // engine not prepared yet; retry later
+        pendingGraphBuild_ = true;
+        return;
+    }
+    // Coalesce while the audio thread isn't claiming (engine stopped, or a
+    // storm of edits): unclaimed offers may not be freed eagerly (see the
+    // lifetime note at offer below), so cap the chain and fold newer dirt
+    // into one rebuild once RT catches up.
+    if (graphArtifacts_.size() >= 8) {
+        pendingGraphBuild_ = true;
+        return;
+    }
+    pendingGraphBuild_ = false;
+
+    auto g = std::make_unique<PlaybackGraph>();
+    g->epoch = nextEpoch_++;
+    g->builtFromEditSeq = model_.lastEditSeq();
+    g->sampleRate = rate;
+
+    // Deterministic order: model order field, then uid.
+    std::vector<std::pair<NodeUid, const ModelTrack*>> ordered;
+    ordered.reserve(model_.tracks().size());
+    for (const auto& [uid, t] : model_.tracks()) ordered.emplace_back(uid, &t);
+    std::sort(ordered.begin(), ordered.end(),
+              [](const auto& a, const auto& b) {
+                  if (a.second->order != b.second->order) return a.second->order < b.second->order;
+                  return a.first < b.first;
+              });
+
+    std::vector<std::pair<NodeUid, const ModelTrack*>> regular, returnRows;
+    for (const auto& row : ordered) {
+        const uint8_t type = row.second->type;
+        if (type == 3) {
+            if (returnRows.size() < size_t(kMaxReturns)) returnRows.push_back(row);
+        } else if (type <= 2) {
+            if (regular.size() < size_t(kMaxTracks)) regular.push_back(row);
+        }
+        // type 4 (master rows) never exists as an entity - the master strip
+        // is synthesized; type 5 (groups) joins with group tracks.
+    }
+
+    // Arena: one stereo lane per regular track, per return, plus the master.
+    const size_t lanes = regular.size() + returnRows.size() + 1;
+    g->arena.assign(lanes * 2 * size_t(kMaxBlock), 0.0f);
+    auto lanePtr = [&](size_t lane, int ch) {
+        return g->arena.data() + (lane * 2 + size_t(ch)) * size_t(kMaxBlock);
+    };
+
+    // Adoption source: the newest previous graph at the same rate.
+    const PlaybackGraph* prev =
+        graphArtifacts_.empty() ? nullptr : graphArtifacts_.back().graph.get();
+    auto findPrev = [&](NodeUid uid) -> DeviceNode* {
+        if (prev == nullptr || prev->sampleRate != rate) return nullptr;
+        for (const auto& [u, n] : prev->nodeIndex)
+            if (u == uid) return n;
+        return nullptr;
+    };
+
+    g->resolver.reserve(regular.size() * 5 + returnRows.size() * 3 + 3);
+
+    auto makeStrip = [&](TrackUnit& u, NodeUid uid, const ModelTrack* mt,
+                         size_t lane, uint8_t wireType) {
+        u.uid = uid;
+        u.wireType = wireType;
+        u.bufL = lanePtr(lane, 0);
+        u.bufR = lanePtr(lane, 1);
+        auto strip = std::make_unique<TrackStrip>();
+        if (mt != nullptr) {
+            strip->setParamImmediate(0, mt->volumeDb);
+            strip->setParamImmediate(1, mt->pan);
+            strip->setParamImmediate(2, (mt->flags & kTrackFlagMuted) ? 1.0f : 0.0f);
+        }
+        strip->prepare(rate, kMaxBlock);            // snaps to the set targets
+        if (DeviceNode* old = findPrev(uid))
+            g->migration.add(strip.get(), old, strip->stateBytes());
+        g->resolver.add(uid, paramKey("mixer.volume"), strip.get(), 0);
+        g->resolver.add(uid, paramKey("mixer.pan"), strip.get(), 1);
+        g->resolver.add(uid, paramKey("mixer.mute"), strip.get(), 2);
+        g->nodeIndex.emplace_back(uid, strip.get());
+        u.strip = strip.get();
+        u.meter.prepare(uid, rate);
+        g->nodes.push_back(std::move(strip));
+    };
+
+    size_t lane = 0;
+    g->tracks.reserve(regular.size());
+    for (const auto& [uid, mt] : regular) {
+        TrackUnit u;
+        makeStrip(u, uid, mt, lane, mt->type);
+        // Post-fader sends exist only where a target return exists; send
+        // values for absent buses stay retained in the ParamMoveTable and
+        // apply when a return appears (post-swap reapply).
+        for (int bus = 0; bus < 2; ++bus) {
+            if (returnRows.size() <= size_t(bus)) break;
+            auto send = std::make_unique<SendNode>(bus);
+            const NodeUid suid = sendNodeUid(uid, bus);
+            send->setParamImmediate(0, bus == 0 ? mt->sendA : mt->sendB);
+            send->prepare(rate, kMaxBlock);
+            if (DeviceNode* old = findPrev(suid))
+                g->migration.add(send.get(), old, send->stateBytes());
+            g->resolver.add(uid, paramKey(bus == 0 ? "mixer.sendA" : "mixer.sendB"),
+                            send.get(), 0);
+            g->nodeIndex.emplace_back(suid, send.get());
+            (bus == 0 ? u.sendA : u.sendB) = send.get();
+            g->nodes.push_back(std::move(send));
+        }
+        g->tracks.push_back(u);
+        ++lane;
+    }
+
+    g->returns.reserve(returnRows.size());
+    for (const auto& [uid, mt] : returnRows) {
+        TrackUnit u;
+        makeStrip(u, uid, mt, lane, 3);
+        g->returns.push_back(u);
+        ++lane;
+    }
+
+    makeStrip(g->master, kMasterNodeUid, nullptr, lane, 4);
+    g->mixL = g->master.bufL;
+    g->mixR = g->master.bufR;
+    g->mainL = g->mixL;
+    g->mainR = g->mixR;
+    g->cueFolded = true;
+
+    // PDC (blueprint 3.3): balance every join. All M2 nodes report zero
+    // latency, so every comp comes out zero and no DelayCompNode is
+    // inserted - the calculation runs so nonzero latencies (M3 chains, M8
+    // lookahead) just work.
+    PdcCalculator pdc;
+    pdc.beginJoin();
+    for (const TrackUnit& t : g->tracks) pdc.addPath(t.strip->latencySamples());
+    for (const TrackUnit& r : g->returns) pdc.addPath(r.strip->latencySamples());
+    // maxLatency() == 0 today; comps stay null.
+
+    g->migration.finalize();
+
+    // LIFETIME RULE (differs from the timeline/tempo paths): a replaced
+    // unclaimed graph must NOT be freed here - the offer we just made holds
+    // MigrationPlan oldNode pointers into it. gcGraph's acked-front rule is
+    // the only safe release: RT ack epochs are monotonic, and an artifact's
+    // epoch being acked proves every plan that references it has either
+    // executed (its owner was claimed) or been superseded.
+    (void)engine_.graphOffer().offer(g.get());
+    graphArtifacts_.push_back({std::move(g)});
+    graphBuilds_.fetch_add(1, std::memory_order_relaxed);
+}
+
+void GraphBuilder::gcGraph() {
+    while (graphArtifacts_.size() > 1 &&
+           engine_.graphOffer().retiredAcked(graphArtifacts_.front().graph->epoch)) {
+        graphArtifacts_.erase(graphArtifacts_.begin());
     }
 }
 

@@ -6,6 +6,37 @@ Newest entry first. Each entry: where the build stands, what comes next.
 
 ---
 
+## 2026-08-25 — M2 features 1+2 done: device contract + compiled graph
+
+Feature 1: `device/DeviceNode.h` (seams 1/3/6 verbatim: ProcessContext,
+DeviceNode, ParamDescriptor, NodeState, VoiceInterface), `graph/TrackStrip`
+(strip AS a DeviceNode: contract keys, gain-domain smoothing, never-jumps
+migration), `graph/MeterProbe` (~30 Hz peak/RMS frames). MidiEvent.h moved
+to core/ (device layer references MidiEventSpan; sequencer -> device -> dsp
+-> core direction).
+
+Feature 2: `graph/SendNode` (accumulating post-fader tap, resolver-bridged
+to the track uid), `graph/DelayComp.h` (DelayCompNode + PdcCalculator - the
+industry join-balancing rule computed at compile; all-zero inputs today),
+`graph/MigrationPlan` (adopt-only, RT save->load POD moves through pre-sized
+scratch), `graph/PlaybackGraph.{h,cpp}` (arena + nodes + resolver + M2
+topology processBlock: zeroed track buffers -> strips -> send taps ->
+returns -> master -> Main bus, meters collected per block),
+GraphBuilder::buildGraph (ordered lanes, model-initialized strips, adoption
+scan against the previous artifact, resolver registration, PDC pass, offer).
+
+Self-caught during reread: a replaced UNCLAIMED graph offer must never be
+eagerly freed - the new offer's MigrationPlan references the predecessor's
+nodes. Graph artifacts therefore free ONLY via the acked-front GC rule
+(provably safe by epoch monotonicity), with a chain cap (8) coalescing
+rebuilds while the audio thread isn't claiming. Timeline/tempo artifacts
+keep eager replacement (no cross-references). Map: 155 classes, sweep green.
+
+**Next: M2 feature 3** — RT swap in AudioEngine (claim -> executeAdopt ->
+ack(retired ?: claimed-1) -> publishInstalledGraphSeq -> reapplyNewerThan
+through the new resolver), drainDirty through resolver, render through the
+graph, meters -> MeterBus, then Kotlin MixerStateHolder wiring.
+
 ## 2026-08-25 — M1 COMPLETE (feature 4: editSeq + structure-delta sync)
 
 The dual-model loop is closed end to end: edit -> editSeq-stamped bundle ->

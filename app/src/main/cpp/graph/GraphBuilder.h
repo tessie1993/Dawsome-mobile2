@@ -11,6 +11,7 @@
 #include "../engine/EngineModel.h"
 #include "../sequencer/TempoMap.h"
 #include "../sequencer/TimelineSnapshot.h"
+#include "PlaybackGraph.h"
 
 // The background compile thread (blueprint 2.3/2.4, graph/ module): owns the
 // EngineModel, applies ModelDelta bundles, and compiles immutable artifacts
@@ -57,16 +58,19 @@ public:
     uint32_t deltasRejected() const noexcept { return rejected_.load(std::memory_order_relaxed); }
     uint32_t timelineBuilds() const noexcept { return timelineBuilds_.load(std::memory_order_relaxed); }
     uint32_t tempoBuilds() const noexcept { return tempoBuilds_.load(std::memory_order_relaxed); }
+    uint32_t graphBuilds() const noexcept { return graphBuilds_.load(std::memory_order_relaxed); }
     uint32_t danglingRefs() const noexcept { return danglingRefs_.load(std::memory_order_relaxed); }
 
 private:
     void threadMain();
     void applyBundle(const std::vector<uint8_t>& bundle);
     void buildTimeline();
+    void buildGraph();
     void rebuildTempoBaseFromModel();
     void consolidateTempoTail(const TempoMap::Snapshot& snap);
     void offerTempoBase(std::unique_ptr<TempoMapBase> built);
     void gcTimeline();
+    void gcGraph();
     void gcTempo();
 
     AudioEngine& engine_;
@@ -81,6 +85,7 @@ private:
 
     uint64_t nextEpoch_ = 1;
     bool pendingTempoRebuild_ = false;          // waits for a sample rate
+    bool pendingGraphBuild_ = false;            // waits for a sample rate
 
     struct TimelineArtifact {
         std::unique_ptr<TimelineSnapshot> snapshot;
@@ -90,13 +95,18 @@ private:
         uint64_t predecessorEpoch = 0;   // whose ack proves this one was claimed
         bool bgPublished = false;
     };
+    struct GraphArtifact {
+        std::unique_ptr<PlaybackGraph> graph;
+    };
     std::vector<TimelineArtifact> timelineArtifacts_;   // oldest -> newest
     std::vector<TempoArtifact>    tempoArtifacts_;      // oldest -> newest
+    std::vector<GraphArtifact>    graphArtifacts_;      // oldest -> newest
 
     std::atomic<uint32_t> applied_{0};
     std::atomic<uint32_t> rejected_{0};
     std::atomic<uint32_t> timelineBuilds_{0};
     std::atomic<uint32_t> tempoBuilds_{0};
+    std::atomic<uint32_t> graphBuilds_{0};
     std::atomic<uint32_t> danglingRefs_{0};   // skipped dangling refs (seam-4 skew)
 };
 
