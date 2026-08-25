@@ -48,6 +48,8 @@ enum class EntityKind : uint16_t {
     TempoMap    = 7,
     LaneGroup   = 8,
     Groove      = 9,
+    SampleRef   = 10,   // v1.2: entityId = device uid; DeviceSampleRefPayload
+    Preview     = 11,   // v1.2: entityId = fileId; payload = UTF-8 path
 };
 
 struct EntityDelta {

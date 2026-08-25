@@ -1,5 +1,17 @@
-# Dawsome Seam Contracts — v1.1.0
+# Dawsome Seam Contracts — v1.2.0
 
+> v1.2.0 (M5 sample assignment + preview): seam 5's StateCodec gains two
+> append-only entity kinds. `SampleRef = 10` (entityId = device uid;
+> payload `{u32 slot, u32 pad0, u64 fileId, char path[byteLen-16]}` —
+> slot 0 for single-sample devices, pad index for DrumRack; fileId 0
+> clears the slot; byteLen 0 removes every ref of the device). `Preview
+> = 11` (entityId = fileId; payload = UTF-8 path; entityId 0 or byteLen 0
+> stops the audition). Both are structural [builder] facts: sample refs
+> mark kDirtyGraph (the builder pins cache handles at compile and hands
+> them to nodes; handles NEVER ride POD migration), preview never touches
+> the graph. Vocabulary addition only — frames with these kinds are
+> skipped+counted by older readers; `kWireVersionState` stays 1.
+>
 > v1.1.0 (M4 SessionPlayer): seam 2 gains the append-only `Session` message
 > family (launch/stop/return/quantum ops). Vocabulary addition only — no
 > layout change, `kMessageVersion` stays 1.
@@ -212,8 +224,9 @@ whole tail. Tail full → forced structure-shaped consolidation.
 - **StateCodec** (model deltas → EngineModel `[builder]`): framed entity
   deltas `{u16 version=1, u16 entityKind, u64 entityId, u32 byteLen,
   payload}` — entityKind ∈ {Track, Clip, ClipContent, Device, Rack, Routing,
-  Scene, TempoMap, LaneGroup, Groove}. Deltas are idempotent upserts/removes;
-  the builder owns application order by editSeq.
+  Scene, TempoMap, LaneGroup, Groove, SampleRef (v1.2), Preview (v1.2)}.
+  Deltas are idempotent upserts/removes; the builder owns application order
+  by editSeq.
 - **Readback**: MeterBus/TransportClock/MidiActivityBus are shared-memory POD
   rings polled from Kotlin; EngineEventBus events are framed like StateCodec
   with `mustDeliver` flag + sequence number; a pull query
