@@ -571,6 +571,53 @@ classDiagram
     VoiceBudgetLedger ..> VoiceGroup
     PlaybackGraph *-- VoiceBudgetLedger
 
+    %% ---- M3 device/ (racks + macros + modulation core; QualityMode) ----
+    %% QualityMode: enum Eco/Standard/High + "quality" key convention
+    %% (device/QualityMode.h) - an ordinary rt-safe param, isQualityMode
+    %% flagged; DegradationGovernor forces Eco at M15.
+    %% DelayCompNode + PdcCalculator moved to device/DelayComp.h (racks
+    %% balance parallel chains internally; graph depends downward).
+    class ModSlot {
+        <<one modulation routing: ModSource -> target key within the owning device, depth -1..1, bipolar flag>>
+    }
+    class ModMatrix {
+        <<offset-only modulation core (§5: modulation never rewrites the base): fixed 32 slots, offsetFor(key, sources) sums normalized offsets; instruments wire sources (LFOs/env/velocity/MPE/macros/random) from M4; full resolution layering assembles at the automation milestone>>
+        +addSlot(s: ModSlot) bool
+        +clear()
+        +offsetFor(key, sources) float
+    }
+    class MacroMapping {
+        <<macro -> member param plain range (inverted ranges legal)>>
+    }
+    class MacroTable {
+        <<rack macro core (§5 top layer): kMaxMacros knobs, 64 mappings total; expandMacro routes through an apply callback = the installed resolver, so macro targets smooth exactly like direct moves>>
+        +addMapping(macroIndex, m: MacroMapping) bool
+        +setMacro(macroIndex, value01)
+        +macroValue(macroIndex) float
+        +expandMacro(macroIndex, apply)
+    }
+    class RackDevice {
+        <<parallel-chain composite DeviceNode: input fans out to each member DeviceChain, internal PDC balances every chain to the slowest (rack reports ONE latency - composes), ChainMixer = smoothed per-chain gains, sum out. Params: macro.1-16 (expand via the builder-wired resolver hook) + rack.chainGain.1-8. State = macro values + mixer gains; members migrate as their own entries; configHash combines chain hashes. Zones (key/velocity/selector/freq-band) + VariationStore join at the racks workflow milestone>>
+        +addChain(chain: DeviceChain) bool
+        +macros() MacroTable
+        +setApplyHook(fn, ctx)
+        +computeConfigHash() uint64_t
+        +process(ctx)
+        +latencySamples() int
+        +saveState(out) / loadState(in)
+    }
+    class ParamBlockEntry {
+        <<16B bulk-set triple (ParamBlockSet frame = envelope + N of these): preset load / variation recall / full reconcile ride one frame into the coalescing table; generation barrier deferred to the presets milestone>>
+    }
+
+    DeviceNode <|-- RackDevice
+    RackDevice *-- MacroTable
+    RackDevice ..> DeviceChain
+    RackDevice ..> DelayCompNode
+    RackDevice ..> SmoothedValue
+    MacroTable *-- MacroMapping
+    ModMatrix *-- ModSlot
+
     %% ---- M2 graph/ (strips + meters) ----
     class TrackStrip {
         <<channel strip AS a DeviceNode (resolver/migration/state uniform): volume (dB->gain at set), constant-power pan (-3dB center, per-channel gain targets), click-free mute; contract keys mixer.volume/pan/mute; gain-domain linear smoothing, current+target migrate (never-jumps); latency 0, configHash 0 (always adoptable); send levels live on SendNodes (M2 f2)>>

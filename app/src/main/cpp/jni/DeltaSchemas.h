@@ -111,6 +111,19 @@ struct ParamValueRecord {
 };
 static_assert(sizeof(ParamValueRecord) == 8);
 
+// ---- ParamBlockSet (CommandCodec kind 1) -----------------------------------
+// Payload = ModelDeltaEnvelope (editSeq stamps the whole set) followed by N
+// ParamBlockEntry triples. Bulk atomic-intent sets (preset load, variation
+// recall, full reconcile). The full table generation barrier lands with the
+// presets milestone; until then entries apply sequentially (per-slot seqlock
+// keeps each entry internally consistent - documented deferral).
+struct ParamBlockEntry {
+    uint64_t nodeUid;
+    uint32_t keyHash;
+    float    plain;
+};
+static_assert(sizeof(ParamBlockEntry) == 16);
+
 // ---- Scene (kind = Scene, 8 bytes) -----------------------------------------
 struct SceneDeltaPayload {
     int32_t  index;

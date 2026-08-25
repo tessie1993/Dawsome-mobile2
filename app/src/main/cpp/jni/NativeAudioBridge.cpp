@@ -7,6 +7,7 @@
 
 #include "../engine/AudioEngine.h"
 #include "CommandCodec.h"
+#include "DeltaSchemas.h"
 #include "ReadbackWire.h"
 
 // The one JNI translation unit (blueprint jni/NativeAudioBridge). Everything
@@ -94,8 +95,26 @@ struct PushVisitor {
         return true;   // ControlOpCode::Nop is the only op today
     }
 
-    // Bulk-set buffers ride the graph (M2); counted-deferred until then.
-    void onBlockSet(const uint8_t*, uint32_t) noexcept { ++deferred; }
+    // Bulk sets (preset load, variation recall, full reconcile): envelope +
+    // ParamBlockEntry triples into the coalescing table. Overflow raises the
+    // reconcile flag as usual. The atomic generation barrier is a documented
+    // deferral (presets milestone); malformed payloads count as deferred.
+    void onBlockSet(const uint8_t* p, uint32_t len) noexcept {
+        if (len < kModelDeltaEnvelopeBytes ||
+            (len - kModelDeltaEnvelopeBytes) % sizeof(ParamBlockEntry) != 0) {
+            ++deferred;
+            return;
+        }
+        ModelDeltaEnvelope env;
+        std::memcpy(&env, p, sizeof env);
+        const size_t count = (len - kModelDeltaEnvelopeBytes) / sizeof(ParamBlockEntry);
+        size_t off = kModelDeltaEnvelopeBytes;
+        for (size_t i = 0; i < count; ++i, off += sizeof(ParamBlockEntry)) {
+            ParamBlockEntry e;
+            std::memcpy(&e, p + off, sizeof e);
+            engine.jniParams().set(e.nodeUid, e.keyHash, e.plain, env.editSeq);
+        }
+    }
 
     // Model deltas feed the GraphBuilder's EngineModel (M1). submitDeltas
     // copies the payload; this engine-io thread is the single producer, so

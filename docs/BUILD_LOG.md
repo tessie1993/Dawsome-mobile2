@@ -6,6 +6,37 @@ Newest entry first. Each entry: where the build stands, what comes next.
 
 ---
 
+## 2026-08-25 — M3 COMPLETE (feature 3: racks/macros/mod core + BlockSet)
+
+- `device/QualityMode.h`: Eco/Standard/High + the "quality" key convention -
+  an ordinary rt-safe param (isQualityMode flagged); the M15 governor forces
+  Eco through the normal param path.
+- `device/ModMatrix.h`: offset-only modulation core (§5 rule: modulation
+  never rewrites the base) - 32 fixed slots, per-key offset summation;
+  instruments wire sources from M4, full layering at the automation
+  milestone.
+- `device/MacroTable.h`: kMaxMacros knobs -> 64 plain-range mappings,
+  expanded through an apply callback (= the installed resolver in the
+  graph), so macro targets smooth exactly like direct moves.
+- `device/RackDevice.h`: parallel-chain composite - fan-out to member
+  DeviceChains, INTERNAL PDC to the slowest chain (rack reports one
+  latency; composes upward), smoothed ChainMixer gains, macro.1-16 +
+  rack.chainGain.1-8 params, state = macros + gains, configHash combines
+  chain hashes. Zones + VariationStore at the racks workflow milestone;
+  model Rack deltas wire construction then. DelayComp moved to device/
+  (racks need it; graph depends downward).
+- ParamBlockSet path live end-to-end: ParamBlockEntry triples (envelope +
+  16B each) -> bridge -> coalescing table; EngineSync's full reconcile now
+  sends ONE BlockSet frame instead of an N-message storm (and includes
+  device.bypass states); presets/variations ride the same frame later.
+  Generation barrier = documented deferral to the presets milestone.
+- Map: 168 classes, sweep green. M3 (device platform) closes.
+
+**Next (M4, blueprint §11): FIRST SOUND** — SubtractiveSynth (registry
+type 0) with VoiceAllocator + scheduler-fed notes through the graph, then
+MetronomeNode, minimal MidiClipPlayer/SessionPlayer per milestone text,
+then WavetableSynth + FmSynth.
+
 ## 2026-08-25 — M3 feature 2 done: voice platform
 
 `device/VoiceAllocator.h` (which also hosts the cross-layer VoiceGroup +

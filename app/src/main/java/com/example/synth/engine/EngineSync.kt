@@ -221,24 +221,33 @@ class EngineSync(
             volumeDb = state.masterVolumeDb, pan = 0f, sendA = 0f, sendB = 0f)
     }
 
-    /** Re-send every addressable param value from the current model. */
+    /**
+     * Re-send every addressable value from the current model (reconcile) as
+     * ONE ParamBlockSet frame - the bulk path presets/variations also ride.
+     */
     fun resendAuthoritativeParams() {
         val state = store.state.value
         val editSeq = store.editSeq
+        val entries = ArrayList<Triple<Long, Int, Float>>(state.tracks.size * 6)
         for (track in state.tracks) {
-            sendTrackParam(state, track.id, ParamKeys.MIXER_VOLUME, editSeq)
-            sendTrackParam(state, track.id, ParamKeys.MIXER_PAN, editSeq)
-            sendTrackParam(state, track.id, ParamKeys.MIXER_MUTE, editSeq)
-            sendTrackParam(state, track.id, ParamKeys.MIXER_SEND_A, editSeq)
-            sendTrackParam(state, track.id, ParamKeys.MIXER_SEND_B, editSeq)
+            val uid = WireProtocol.makeNodeUid(WireProtocol.NODE_KIND_TRACK, track.id)
+            entries.add(Triple(uid, WireProtocol.paramKey(ParamKeys.MIXER_VOLUME), track.volumeDb))
+            entries.add(Triple(uid, WireProtocol.paramKey(ParamKeys.MIXER_PAN), track.pan))
+            entries.add(Triple(uid, WireProtocol.paramKey(ParamKeys.MIXER_MUTE),
+                if (track.isMuted) 1f else 0f))
+            entries.add(Triple(uid, WireProtocol.paramKey(ParamKeys.MIXER_SEND_A), track.sendLevelA))
+            entries.add(Triple(uid, WireProtocol.paramKey(ParamKeys.MIXER_SEND_B), track.sendLevelB))
             for (device in track.devices) {
-                val uid = WireProtocol.makeNodeUid(WireProtocol.NODE_KIND_DEVICE, device.id)
+                val duid = WireProtocol.makeNodeUid(WireProtocol.NODE_KIND_DEVICE, device.id)
+                entries.add(Triple(duid, WireProtocol.paramKey(ParamKeys.DEVICE_BYPASS),
+                    if (device.isEnabled) 0f else 1f))
                 for ((name, value) in device.params)
-                    sendParam(uid, name, value.toDouble(), editSeq)
+                    entries.add(Triple(duid, WireProtocol.paramKey(name), value))
             }
         }
-        sendParam(WireProtocol.masterNodeUid, ParamKeys.MIXER_VOLUME,
-            state.masterVolumeDb.toDouble(), editSeq)
+        entries.add(Triple(WireProtocol.masterNodeUid,
+            WireProtocol.paramKey(ParamKeys.MIXER_VOLUME), state.masterVolumeDb))
+        controller.sendParamBlockSet(editSeq, entries)
     }
 
     // ---- delta encoding helpers ----------------------------------------------

@@ -141,6 +141,30 @@ class EngineController {
     }
 
     /**
+     * Bulk param set (preset load, variation recall, full reconcile): one
+     * ParamBlockSet frame - envelope (editSeq) + 16-byte triples - into the
+     * coalescing table. Never backpressured; overflow reconciles as usual.
+     */
+    fun sendParamBlockSet(editSeq: Int, entries: List<Triple<Long, Int, Float>>) {
+        if (!NativeAudioBridge.isLoaded || entries.isEmpty()) return
+        scope.launch {
+            if (ensureHandle() == 0L) return@launch
+            val payload = 8 + entries.size * 16
+            val byteLen = WireProtocol.FRAME_HEADER_BYTES + payload
+            val buf = deltaBufferFor(byteLen)
+            buf.clear()
+            buf.putShort(WireProtocol.WIRE_VERSION.toShort())
+                .putShort(WireProtocol.KIND_PARAM_BLOCK_SET.toShort())
+                .putInt(payload)
+                .putInt(editSeq).putInt(0)
+            for ((uid, keyHash, plain) in entries) {
+                buf.putLong(uid).putInt(keyHash).putFloat(plain)
+            }
+            NativeAudioBridge.nativePushCommands(handle, buf, byteLen)
+        }
+    }
+
+    /**
      * Push one ModelDelta bundle ([DeltaEncoder.build]) to the GraphBuilder.
      * Deltas apply whether or not audio is running (the builder thread lives
      * with the native session); they are idempotent and never backpressured.
