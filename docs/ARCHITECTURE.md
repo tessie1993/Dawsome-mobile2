@@ -2,6 +2,8 @@
 
 This document is the **authoritative living map of the codebase**, maintained and kept continuously synchronized with every class, interface, method, and relationship implemented across the architecture (both Native C++ NDK DSP Engine and Kotlin UDF Layer).
 
+**Scope:** this map documents code that exists in the source tree today. The target end-state architecture is specified in [`docs/spec/ARCHITECTURE_BLUEPRINT.md`](spec/ARCHITECTURE_BLUEPRINT.md) (built from the functional specs [`SPEC_PART1_FUNCTIONAL.md`](spec/SPEC_PART1_FUNCTIONAL.md) and [`SPEC_PART2_WORKFLOW.md`](spec/SPEC_PART2_WORKFLOW.md)); classes move into this map when their source lands. The C++ classes under `app/src/main/cpp/` are present in source but not yet wired into the Gradle build (no CMake integration yet — that is the blueprint's M0 milestone).
+
 ```mermaid
 classDiagram
     %% ==========================================
@@ -31,36 +33,17 @@ classDiagram
     EffectNode <|-- CompressorNode
     EffectNode <|-- ReverbNode
     EffectNode <|-- DelayNode
+    EffectNode <|-- ChorusNode
+    EffectNode <|-- TapeDelayNode
     EffectNode <|-- LimiterNode
     EffectNode <|-- MeteringNode
 
     %% Sequencer Engines
     PlaybackEngine <|-- ArrangementEngine
-    PlaybackEngine <|-- SessionEngine
-
-    %% Kotlin MIDI Effects
-    MidiEffectDevice <|-- RealtimeArpeggiator
-    MidiEffectDevice <|-- RealtimeChordDevice
-    MidiEffectDevice <|-- RealtimeScaleDevice
-    MidiEffectDevice <|-- RealtimeVelocityDevice
-    MidiEffectDevice <|-- RealtimeNoteEchoDevice
 
     %% ==========================================
     %% 1. NATIVE REAL-TIME C++ AUDIO ENGINE (NDK)
     %% ==========================================
-    class AudioEngine {
-        -AudioGraph audioGraph_
-        -TransportEngine transport_
-        -AudioBufferPool bufferPool_
-        -LockFreeQueue~EngineCommand, 1024~ commandQueue_
-        -LockFreeQueue~MeterFrame, 128~ meterQueue_
-        +start() bool
-        +stop()
-        +processAudio(float** outputBuffers, size_t numFrames)
-        +postCommand(EngineCommand cmd) bool
-        +pollMeters(MeterFrame* dest, size_t maxFrames) size_t
-    }
-
     class AudioNode {
         <<abstract>>
         #string id_
@@ -247,6 +230,17 @@ classDiagram
         +setPingPong(enabled: bool)
     }
 
+    class ChorusNode {
+        +setRate(rate: float)
+        +setDepth(depth: float)
+    }
+
+    class TapeDelayNode {
+        +setDelayTime(ms: float)
+        +setFeedback(fb: float)
+        +setWowDepth(depth: float)
+    }
+
     class LimiterNode {
         +setCeilingDb(ceilingDb: float)
         +setLookaheadMs(ms: float)
@@ -277,16 +271,6 @@ classDiagram
 
     class ArrangementEngine {
         +evaluate(startBeat: double, endBeat: double, track: TrackNode)
-    }
-
-    class SessionEngine {
-        +launchClip(track: int, slot: int)
-        +launchScene(sceneIndex: int)
-        +evaluate(startBeat: double, endBeat: double, track: TrackNode)
-    }
-
-    class AutomationEngine {
-        +evaluateBlock(startBeat: double, endBeat: double, numFrames: size_t)
     }
 
     class ProcessContext {
@@ -342,13 +326,64 @@ classDiagram
         +int32_t intValue2
     }
 
-    class NativeAudioBridge {
-        <<singleton>>
-        +initEngine(sampleRate: int, bufferSize: int)
-        +startEngine()
-        +stopEngine()
-        +postCommand(cmd: EngineCommand)
-        +pollMeterData(dest: FloatArray) int
+    %% Native DSP primitives & support types (header-only helpers used
+    %% inside the nodes above; listed for completeness of the map)
+    class LockFreeQueue~T_Capacity~ {
+        <<SPSC ring buffer>>
+    }
+    class Oscillator {
+        <<band-limited osc core>>
+    }
+    class MoogLadderFilter {
+        <<4-pole ladder LPF>>
+    }
+    class CombFilter {
+        <<reverb comb stage>>
+    }
+    class AllpassFilter {
+        <<reverb allpass stage>>
+    }
+    class AudioFileDecoder {
+        <<WAV decode>>
+    }
+    class Resampler {
+        <<rate conversion>>
+    }
+    class FFTProcessor {
+        <<radix-2 FFT>>
+    }
+    class SubtractiveVoice {
+        <<voice struct>>
+    }
+    class WavetableVoice {
+        <<voice struct>>
+    }
+    class FMVoice {
+        <<voice struct>>
+    }
+    class FMOperatorConfig {
+        <<operator params>>
+    }
+    class DrumPadVoice {
+        <<pad voice struct>>
+    }
+    class SamplerVoice {
+        <<voice struct>>
+    }
+    class ADSRData {
+        <<envelope params>>
+    }
+    class BiquadCoeffs {
+        <<EQ band coeffs>>
+    }
+    class BiquadState {
+        <<EQ band state>>
+    }
+    class NativeMidiNote {
+        <<sequencer event struct>>
+    }
+    class NativeArrangementClip {
+        <<sequencer clip struct>>
     }
 
     %% ==========================================
@@ -427,6 +462,20 @@ classDiagram
         +Color TextDisabled
     }
 
+    class EarthColors {
+        <<data class>>
+        +Color bgObsidian
+        +Color glassBase
+        +Color glassSurface
+        +Color primaryAmber
+        +Color autumnRust
+        +Color autumnTerracotta
+        +Color autumnHarvestGold
+        +Color natureForestPine
+        +Color natureEmerald
+        +Color natureMossSage
+    }
+
     class EarthGlassTokens {
         <<object>>
         +GlassElevation Level1Dock
@@ -444,6 +493,13 @@ classDiagram
         +TextStyle paramLabel
         +TextStyle paramValue
         +TextStyle microBadge
+    }
+
+    class EarthTheme {
+        <<composable + object>>
+        +EarthTheme(colors: EarthColors, typography: EarthTypography, content)
+        +EarthColors colors
+        +EarthTypography typography
     }
 
     class EarthTransportBar {
@@ -780,6 +836,15 @@ classDiagram
         +toggleDrumStep(pad: DrumPadType, stepBeat: Float)
     }
 
+    class BrowserItem {
+        <<data class>>
+        +String id
+        +String name
+        +BrowserCategory category
+        +List~String~ tags
+        +String author
+    }
+
     class SoundBrowserStateHolder {
         +StateFlow~BrowserUiState~ state
         +selectCategory(cat: BrowserCategory)
@@ -796,109 +861,7 @@ classDiagram
     }
 
     %% ==========================================
-    %% 6. MIDI & MODULATION ENGINES
-    %% ==========================================
-    class MidiTransformations {
-        <<object>>
-        +quantize(notes, gridBeat, amount) List~MidiNote~
-        +humanize(notes, timingDevBeats, velocityDev) List~MidiNote~
-        +strum(notes, delayPerNoteBeats, isUpward) List~MidiNote~
-        +chop(notes, divisions) List~MidiNote~
-        +scaleConstrain(notes, rootNote, scale) List~MidiNote~
-        +transpose(notes, semitones) List~MidiNote~
-        +invert(notes) List~MidiNote~
-        +reverse(notes) List~MidiNote~
-    }
-
-    class MidiGenerators {
-        <<object>>
-        +generateEuclidean(steps, pulses, pitch, stepBeat, velocity) List~MidiNote~
-        +generateChordProgression(rootNote, scale, progressionDegrees, beatsPerChord) List~MidiNote~
-        +generateBassline(rootNote, scale, totalBars, density) List~MidiNote~
-    }
-
-    class MidiEffectDevice {
-        <<interface>>
-        +String id
-        +String name
-        +Boolean isEnabled
-        +process(notes: List~MidiNote~, currentBeat: Float) List~MidiNote~
-    }
-
-    class RealtimeArpeggiator {
-        +ArpStyle style
-        +Float rateBeat
-        +Int octaveRange
-        +Float gate
-    }
-
-    class RealtimeChordDevice {
-        +List~Int~ intervals
-    }
-
-    class RealtimeScaleDevice {
-        +Int rootNote
-        +MusicalScale scale
-    }
-
-    class RealtimeVelocityDevice {
-        +Float gain
-        +Float randomizeAmount
-    }
-
-    class RealtimeNoteEchoDevice {
-        +Int repeats
-        +Float delayBeats
-        +Float decay
-        +Int pitchShiftPerRepeat
-    }
-
-    class ModulationMatrixEngine {
-        +List~ModMatrixRoute~ routes
-        +addRoute(source: ModSource, destination: ModDestination, depth: Float)
-        +removeRoute(id: String)
-        +computeDestinationModulation(destination, sampleRate, lfo1RateHz, lfo2RateHz, lfo3RateHz, velocity, modWheel) Float
-    }
-
-    class ModMatrixRoute {
-        <<data class>>
-        +String id
-        +ModSource source
-        +ModDestination destination
-        +Float depth
-        +Boolean isBipolar
-        +Boolean isEnabled
-    }
-
-    class ModSource {
-        <<enumeration>>
-        LFO_1
-        LFO_2
-        LFO_3
-        ENV_AMP
-        ENV_FILTER
-        ENV_MOD
-        VELOCITY
-        MOD_WHEEL
-        KEY_TRACK
-        RANDOM_SH
-    }
-
-    class ModDestination {
-        <<enumeration>>
-        OSC1_PITCH
-        OSC2_PITCH
-        WT_POSITION
-        FM_DEPTH
-        FILTER_CUTOFF
-        FILTER_RESO
-        DRIVE
-        PAN
-        REVERB_SEND
-    }
-
-    %% ==========================================
-    %% 7. PERSISTENCE & AUDIO EXPORT
+    %% 6. PERSISTENCE (ROOM)
     %% ==========================================
     class DawDatabase {
         <<abstract>>
@@ -926,46 +889,9 @@ classDiagram
         +String projectDataJson
     }
 
-    class DawProjectRepository {
-        +Flow~List~ProjectHeader~~ allProjects
-        +saveProject(state: ProjectState) Long
-        +deleteProject(id: Long)
-    }
-
-    class ProjectSerializer {
-        <<object>>
-        +serialize(state: ProjectState) String
-        +deserialize(json: String) ProjectState
-    }
-
-    class AudioRecorderEngine {
-        +Boolean isRecording
-        +Float inputRmsLevel
-        +Float inputPeakLevel
-        +startRecording()
-        +stopRecording(destinationWavFile: File?) ShortArray
-    }
-
-    class StemExporter {
-        <<object>>
-        +exportProjectStems(projectState, outputDir, sampleRate, renderBars) List~File~
-        +packageStemsToZip(stemFiles, zipOutputFile) File
-    }
-
-    class WavWriter {
-        <<object>>
-        +createWavFile(file: File, pcmData: ShortArray, sampleRate: Int, channels: Int)
-    }
-
     %% ==========================================
-    %% 8. RELATIONSHIPS & DEPENDENCY FLOW
+    %% 7. RELATIONSHIPS & DEPENDENCY FLOW
     %% ==========================================
-    AudioEngine *-- AudioGraph
-    AudioEngine *-- TransportEngine
-    AudioEngine *-- AudioBufferPool
-    AudioEngine ..> EngineCommand
-    AudioEngine ..> MeterFrame
-
     AudioGraph *-- TrackNode
     AudioGraph *-- GroupTrackNode
     AudioGraph *-- ReturnTrackNode
@@ -978,8 +904,6 @@ classDiagram
     ReturnTrackNode *-- DeviceChain
     MasterNode *-- DeviceChain
     DeviceChain *-- DeviceNode
-
-    NativeAudioBridge ..> AudioEngine
 
     MainActivity ..> MainDawScreen
     MainDawScreen ..> ProjectStore
@@ -1027,15 +951,5 @@ classDiagram
     SoundBrowserStateHolder --> ProjectStore
     MasteringStateHolder --> ProjectStore
 
-    ModulationMatrixEngine *-- ModMatrixRoute
-    ModMatrixRoute --> ModSource
-    ModMatrixRoute --> ModDestination
-
-    DawProjectRepository --> ProjectDao
-    DawProjectRepository ..> ProjectSerializer
     DawDatabase *-- ProjectDao
-    DawProjectRepository ..> ProjectState
-
-    AudioRecorderEngine ..> WavWriter
-    StemExporter ..> WavWriter
 ```
