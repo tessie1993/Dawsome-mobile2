@@ -6,7 +6,7 @@
 
 #include "../core/EngineConfig.h"
 #include "../core/FixedVector.h"
-#include "MidiEvent.h"
+#include "../core/MidiEvent.h"
 #include "TempoMap.h"
 #include "TimelineSnapshot.h"
 #include "TransportEngine.h"

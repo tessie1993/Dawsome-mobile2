@@ -3,7 +3,7 @@
 #include <cstddef>
 #include <cstdint>
 
-#include "../core/NodeUid.h"
+#include "NodeUid.h"
 
 // Block-local MIDI event stream types (the seam-1 `MidiEventSpan` that
 // ProcessContext carries). Events are sample-accurate within the render

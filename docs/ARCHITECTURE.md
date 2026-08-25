@@ -2,7 +2,7 @@
 
 This document is the **authoritative living map of the codebase**, maintained and kept continuously synchronized with every class, interface, method, and relationship implemented across the architecture (both Native C++ NDK DSP Engine and Kotlin UDF Layer).
 
-**Scope:** this map documents code that exists in the source tree today. The target end-state architecture is specified in [`docs/spec/ARCHITECTURE_BLUEPRINT.md`](spec/ARCHITECTURE_BLUEPRINT.md) (contracts: [`CONTRACTS.md`](spec/CONTRACTS.md); functional specs: [`SPEC_PART1_FUNCTIONAL.md`](spec/SPEC_PART1_FUNCTIONAL.md), [`SPEC_PART2_WORKFLOW.md`](spec/SPEC_PART2_WORKFLOW.md)); classes move into this map when their source lands. The old pre-blueprint C++ skeleton has been fully removed - `app/src/main/cpp/` now contains only new-engine modules (`core/`, `dsp/`, `engine/`, `graph/`, `jni/`, `sequencer/`) built to the blueprint, not yet wired into the Gradle build (that happens when the engine is ready to link; blueprint M0).
+**Scope:** this map documents code that exists in the source tree today. The target end-state architecture is specified in [`docs/spec/ARCHITECTURE_BLUEPRINT.md`](spec/ARCHITECTURE_BLUEPRINT.md) (contracts: [`CONTRACTS.md`](spec/CONTRACTS.md); functional specs: [`SPEC_PART1_FUNCTIONAL.md`](spec/SPEC_PART1_FUNCTIONAL.md), [`SPEC_PART2_WORKFLOW.md`](spec/SPEC_PART2_WORKFLOW.md)); classes move into this map when their source lands. The old pre-blueprint C++ skeleton has been fully removed - `app/src/main/cpp/` now contains only new-engine modules (`core/`, `device/`, `dsp/`, `engine/`, `graph/`, `jni/`, `sequencer/`) built to the blueprint, not yet wired into the Gradle build (that happens when the engine is ready to link; blueprint M0).
 
 ```mermaid
 classDiagram
@@ -466,6 +466,64 @@ classDiagram
     EngineModel *-- ModelTempo
     ModelClipContent *-- ModelNote
     EngineModel ..> EntityDelta
+
+    %% ---- M2 device/ (the device platform contract, seams 1+3+6) ----
+    class ProcessContext {
+        <<[RT] read-only per process() call: buffers (in-place allowed), block facts (frames <= kMaxBlock, timeline position, beat, bpm, transport flags, offline flag), midiIn: MidiEventSpan, midiOut/sidechain seams (fwd: MidiEventSink, SidechainBus)>>
+    }
+    class ParamDescriptor {
+        <<seam 6: stable semantic key (NEVER reindexed), display, plain range/default, curve (Linear/Log/Exp/Db/Switch), unit, smoothingMs, rtSafe (false = structure-shaped), excludeFromRandomize, isQualityMode>>
+    }
+    class NodeStateHeader {
+        <<seam 3: nodeUid, configHash (topology-relevant config only), sizeBytes, per-type version, flags>>
+    }
+    class NodeState {
+        <<header + POD body; version mismatch = reset-with-fade, never partial adoption>>
+    }
+    class DeviceNode {
+        <<abstract; THE device contract (frozen): prepare [builder], process [RT], reset [RT], latencySamples CONSTANT between prepares, param descriptors + setParamImmediate(dense) [RT post-resolution], saveState [RT at swap, pointer/POD only] / loadState. Bypass belongs to the CHAIN (latency-preserving, ~10ms equal-power). Devices never test denormals (global FTZ/DAZ)>>
+        +prepare(sampleRate, maxBlock)*
+        +process(ctx: ProcessContext)*
+        +reset()*
+        +latencySamples() int*
+        +paramCount() int*
+        +paramDescriptor(i) ParamDescriptor*
+        +setParamImmediate(denseIndex, plain)*
+        +stateBytes() size_t*
+        +saveState(out: NodeState)*
+        +loadState(in: NodeState) bool*
+    }
+    class MpeNoteState {
+        <<per-note expression: pressure, pitchBendSemitones, slide>>
+    }
+    class VoiceInterface {
+        <<abstract; instruments add: noteOn(note, velocity, MpeNoteState), noteOff, allNotesOff, stealVoices(count) - the ledger's steal demand (releasing -> oldest -> quietest, protect recent + drum transients)>>
+    }
+
+    DeviceNode ..> ProcessContext
+    DeviceNode ..> ParamDescriptor
+    DeviceNode ..> NodeState
+    NodeState *-- NodeStateHeader
+    ProcessContext ..> MidiEventSpan
+    VoiceInterface ..> MpeNoteState
+
+    %% ---- M2 graph/ (strips + meters) ----
+    class TrackStrip {
+        <<channel strip AS a DeviceNode (resolver/migration/state uniform): volume (dB->gain at set), constant-power pan (-3dB center, per-channel gain targets), click-free mute; contract keys mixer.volume/pan/mute; gain-domain linear smoothing, current+target migrate (never-jumps); latency 0, configHash 0 (always adoptable); send levels live on SendNodes (M2 f2)>>
+        +process(ctx) in-place
+        +setParamImmediate(dense, plain)
+        +saveState(out) / loadState(in)
+        +volumeDb() / pan() / muted()
+    }
+    class MeterProbe {
+        <<post-fader peak+RMS over a ~30Hz window -> one MeterFrame per window (seq, clip flag); pure + hostside-testable, the graph schedule pushes ready frames to the MeterBus>>
+        +prepare(uid, sampleRate)
+        +sample(l, r, numFrames, out: MeterFrame) bool
+    }
+
+    DeviceNode <|-- TrackStrip
+    TrackStrip ..> SmoothedValue
+    MeterProbe ..> MeterFrame
 
     %% ---- M1 graph/ (GraphBuilder - the background compile thread) ----
     class GraphBuilder {
