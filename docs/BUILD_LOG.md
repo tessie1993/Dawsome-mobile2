@@ -6,6 +6,46 @@ Newest entry first. Each entry: where the build stands, what comes next.
 
 ---
 
+## 2026-08-25 — Review cycle 3: FAIL -> all findings fixed (resubmitted)
+
+The owner merged PR #10 ahead of the verdict; the fixes land as a
+follow-up slice on the restarted branch. Findings, fixed:
+
+- [MAJOR] Undo of a sample assignment never reached the engine: full
+  pushes are upserts-only, and an emptied slot sends nothing. Sample refs
+  are SET MEMBERSHIP - full pushes AND chain resends now reset-then-readd
+  per device (byteLen-0 remove-all first; idempotent). The broader
+  membership hole (tracks/devices/clips removed by undo survive a full
+  push - audibly, for a track) is documented at the seam and TRACKED for
+  the persistence milestone.
+- [MAJOR] LOAD was unreachable on the shipped default project (no SAMPLER
+  exists, none creatable in-app) and failed silently. New
+  LoadSampleIntoNewSampler action - the Simpler-on-drop gesture: ONE
+  undoable action appends a sampler with the ref + baked sample.root;
+  assignToSampler auto-creates on the best instrument-capable lane when
+  no sampler exists; the only remaining failure (zero tracks) surfaces
+  on the row as NO TRACK, never silent.
+- [MINOR] A finished audition pinned its file for the session: process()
+  now releases current_ (ack + unpin) as soon as no older artifact is
+  still fading - never acking a newer epoch past a live fade (monotonic
+  acks would let the builder free a mid-fade clip).
+- [MINOR] Replace-during-tail jumped the retiring gain back up: the
+  captured retire gain now folds in the tail factor.
+- [NIT] Stale-rate offer after reopen: prepare() drains the unclaimed
+  offer too; audition simply does not resume across a rate change.
+- [NIT] Factory tails cut hot (-14..-26 dB at truncation): 15 ms end
+  fade baked into every generated file.
+- [NIT] Install gate hardened: fsync before rename + length > 44
+  completeness predicate (crash-window husks can never pass).
+- [NIT deferrals tracked]: previewingItemId auto-clear at one-shot end
+  (wire PreviewPlayer::auditioning() into readback), gesture transactions
+  (assign+root = one undo step), drum-pad drag assignment.
+
+Host check green; map 208 classes, sweep green incl. duplicates.
+Resubmitted for the cycle-3 re-verdict. STOP directive still standing.
+
+---
+
 ## 2026-08-25 — M5 FINALE built: sample assignment + PreviewPlayer + factory pack (awaiting review cycle 3)
 
 The sample pipeline is closed end to end. OWNER DIRECTIVE ON RECORD: "stop

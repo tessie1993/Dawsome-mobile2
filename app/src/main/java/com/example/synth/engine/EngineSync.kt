@@ -24,10 +24,16 @@ import kotlinx.coroutines.launch
  *
  * Everything is stamped with the store's monotonic editSeq. A null action
  * from the store (undo/redo) and every RUNNING transition trigger a FULL
- * model push + param re-send - deltas are idempotent upserts, so wholesale
- * resync is always safe. Cascading removals (track delete) derive from the
- * PRE-change state; shared ClipContent is removed only when no clip in the
- * post-change state still references it.
+ * model push + param re-send. Deltas are idempotent, but upserts alone do
+ * not reconcile SET MEMBERSHIP: sample refs are reset-then-readded per
+ * device (cycle-3 fix), while a track/device/clip REMOVED by undo is not
+ * yet deleted engine-side by a full push - it lives on (audibly, for a
+ * track) until an explicit remove or engine restart. The general
+ * membership reconciliation (engine-side mark-and-sweep against the
+ * pushed set) is a TRACKED HOLE scheduled with the persistence milestone.
+ * Cascading removals (track delete) derive from the PRE-change state;
+ * shared ClipContent is removed only when no clip in the post-change state
+ * still references it.
  *
  * Linked clips: the canonical content id of a linked arrangement/session
  * pair is the lexicographic MIN of the two clip ids - symmetric and
@@ -196,6 +202,10 @@ class EngineSync(
                     action.slot, action.fileId, action.path)
                 controller.sendModelDelta(d.build())
             }
+            // The chain resend carries the new device row (sample.root baked
+            // into its params tail) AND its ref - one bundle, one rebuild.
+            is ProjectAction.LoadSampleIntoNewSampler ->
+                sendDeviceChain(state, editSeq, action.trackId)
             is ProjectAction.PreviewSample -> {
                 val d = DeltaEncoder(editSeq)
                 d.preview(action.fileId, action.path)
@@ -295,6 +305,13 @@ class EngineSync(
             val duid = WireProtocol.makeNodeUid(WireProtocol.NODE_KIND_DEVICE, dev.id)
             d.upsertDevice(duid, trackUid, deviceTypeWire(dev.type), dev.isEnabled, order,
                 deviceWireParams(dev))
+            // Full pushes are upserts-only for most entities, but sample refs
+            // are SET-MEMBERSHIP: an undo that emptied a slot would otherwise
+            // never reach the engine (the sampler keeps playing - review
+            // cycle-3 MAJOR). Reset then re-add: byteLen-0 remove-all exists
+            // for exactly this and both frames are idempotent. Emitted for
+            // every device so future slotted types can never miss it.
+            d.remove(WireProtocol.ENTITY_SAMPLE_REF, duid)
             for ((slot, ref) in dev.sampleRefs) d.sampleRef(duid, slot, ref.fileId, ref.path)
         }
         for (c in t.arrangementClips) encodeArrangementClip(d, trackUid, c)
@@ -450,11 +467,15 @@ class EngineSync(
                 if (gone.sampleRefs.isNotEmpty()) d.remove(WireProtocol.ENTITY_SAMPLE_REF, duid)
                 d.remove(WireProtocol.ENTITY_DEVICE, duid)
             }
-        // Upsert the whole chain (order is positional).
+        // Upsert the whole chain (order is positional). Refs follow the same
+        // reset-then-add discipline as full pushes: chain resends stay
+        // set-membership-correct for sample slots too.
         t.devices.forEachIndexed { order, dev ->
-            d.upsertDevice(WireProtocol.makeNodeUid(WireProtocol.NODE_KIND_DEVICE, dev.id),
-                trackUid, deviceTypeWire(dev.type), dev.isEnabled, order,
+            val duid = WireProtocol.makeNodeUid(WireProtocol.NODE_KIND_DEVICE, dev.id)
+            d.upsertDevice(duid, trackUid, deviceTypeWire(dev.type), dev.isEnabled, order,
                 deviceWireParams(dev))
+            d.remove(WireProtocol.ENTITY_SAMPLE_REF, duid)
+            for ((slot, ref) in dev.sampleRefs) d.sampleRef(duid, slot, ref.fileId, ref.path)
         }
         controller.sendModelDelta(d.build())
     }
