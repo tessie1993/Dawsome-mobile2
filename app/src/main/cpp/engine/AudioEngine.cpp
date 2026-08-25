@@ -27,6 +27,7 @@ bool AudioEngine::start(const OboeDriver::Config& cfg) noexcept {
     // sequence (cache re-keys, re-prime) arrives with the media system.
     if (driver_.sampleRate() != transport_.tempoMap().sampleRate())
         transport_.prepare(driver_.sampleRate());
+    metronome_.prepare(driver_.sampleRate());
     return driver_.start();
 }
 
@@ -149,6 +150,8 @@ void AudioEngine::render(float* const* outputs, int numFrames,
     for (int s = 0; s < spanCount; ++s) {
         midiScheduler_.scheduleSpan(timeline_, spans[s],
                                     transport_.tempoMap(), transport_.playing());
+        metronome_.scheduleSpan(spans[s], transport_.tempoMap(),
+                                transport_.playing(), transport_.metronome());
     }
     midiScheduler_.finalizeBlock();   // one sorted run per track for the graph
 
@@ -179,6 +182,11 @@ void AudioEngine::render(float* const* outputs, int numFrames,
         for (int c = 0; c < kMaxChannels; ++c)
             for (int f = 0; f < numFrames; ++f) outputs[c][f] = 0.0f;
     }
+
+    // 6b) The click renders after the graph, straight onto the output bus:
+    //     never recorded, never metered, unaffected by the mix (§3.2; Cue
+    //     folds into Main until unfolded routing exists).
+    metronome_.render(outputs[0], outputs[1], numFrames);
 
     // 7) Publish the block clock from the real transport.
     TransportClockData d;

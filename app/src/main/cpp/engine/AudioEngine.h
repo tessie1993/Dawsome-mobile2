@@ -12,6 +12,7 @@
 #include "../core/SpscRing.h"
 #include "../core/TimeAnchor.h"
 #include "../graph/PlaybackGraph.h"
+#include "../sequencer/MetronomeNode.h"
 #include "../sequencer/MidiScheduler.h"
 #include "../sequencer/TimelineSnapshot.h"
 #include "../sequencer/TransportEngine.h"
@@ -122,6 +123,7 @@ private:
     PlaybackGraph* graph_ = nullptr;               // RT-owned current pointer
 
     MidiScheduler midiScheduler_;
+    MetronomeNode metronome_;
 
     std::unique_ptr<GraphBuilder> builder_;
 

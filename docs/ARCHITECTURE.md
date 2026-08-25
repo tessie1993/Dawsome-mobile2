@@ -664,6 +664,20 @@ classDiagram
     MidiScheduler ..> MidiTrackRun
     PlaybackGraph ..> MidiTrackRun
 
+    %% ---- M4 sequencer/ (MetronomeNode) ----
+    class MetronomeNode {
+        <<the click (§3.2 bus-routable: Route Cue|Main|Both, Cue folded until unfolded routing): engine-owned, rendered AFTER the graph onto the output bus - never recorded/metered/mixed. Two sine bursts (accented bar 1600Hz / beat 1100Hz) with instant attack + exp decay; beat crossings derive from the SAME TransportSpans + TempoMap conversions the schedulers use, so clicks stay sample-locked through tempo changes and loop wraps; fixed click pool rings across blocks>>
+        +prepare(sampleRate)
+        +setRoute(r: Route)
+        +scheduleSpan(span, map, playing, enabled)
+        +render(l, r, numFrames)
+        +reset()
+    }
+
+    MetronomeNode ..> TransportSpan
+    MetronomeNode ..> TempoMap
+    AudioEngine *-- MetronomeNode
+
     %% ---- M2 graph/ (strips + meters) ----
     class TrackStrip {
         <<channel strip AS a DeviceNode (resolver/migration/state uniform): volume (dB->gain at set), constant-power pan (-3dB center, per-channel gain targets), click-free mute; contract keys mixer.volume/pan/mute; gain-domain linear smoothing, current+target migrate (never-jumps); latency 0, configHash 0 (always adoptable); send levels live on SendNodes (M2 f2)>>
