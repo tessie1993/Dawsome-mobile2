@@ -6,6 +6,34 @@ Newest entry first. Each entry: where the build stands, what comes next.
 
 ---
 
+## 2026-08-25 — Delta verdict: PASS — M5 finale fully gated through
+
+The reviewer verified the membership-diff commit (a3c7918) beyond the
+fix map: remove->upsert ordering inside one bundle (no compile-cycle
+window sees one without the other), linked-clip content pairings match
+the lexicographic-MIN rule, redo symmetry holds by construction, and the
+key safety property is named - removals are emitted only for entities
+absent from the AUTHORITATIVE post state, so a stale pre-state can only
+MISS removals (graceful degradation to the tracked-hole behavior), never
+produce a wrong one.
+
+One non-blocking MINOR, TRACKED (reviewer: "fix when convenient, ideally
+before MIDI-driven dispatch arrives"): ProjectStore's one-step guarantee
+rests on serialization the store does not actually enforce - the scope
+is Dispatchers.Default (a pool) while undo()/redo() run inline on the
+caller thread, and lastState is a plain var. Today every call originates
+on main and the overlap window is vanishingly small; the prescription is
+recorded verbatim for the MIDI-input milestone: confine the store to a
+single dispatcher (Main.immediate or a dedicated confined dispatcher)
+and route undo()/redo() through the same scope.launch as dispatch,
+making the one-step-deep property true by construction.
+
+M5 finale is COMPLETE behind the gate (cycles: FAIL -> fixed -> PASS ->
+delta PASS). The fix slice (e4a5d12 + a3c7918) goes up as the follow-up
+PR. STOPPED after this per the owner directive - no next feature.
+
+---
+
 ## 2026-08-25 — Review cycle 3 re-verdict: PASS + interim membership-diff fix
 
 Reviewer verified all eight cycle-3 fixes in the code at e4a5d12 and
