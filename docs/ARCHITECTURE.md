@@ -2,7 +2,7 @@
 
 This document is the **authoritative living map of the codebase**, maintained and kept continuously synchronized with every class, interface, method, and relationship implemented across the architecture (both Native C++ NDK DSP Engine and Kotlin UDF Layer).
 
-**Scope:** this map documents code that exists in the source tree today. The target end-state architecture is specified in [`docs/spec/ARCHITECTURE_BLUEPRINT.md`](spec/ARCHITECTURE_BLUEPRINT.md) (built from the functional specs [`SPEC_PART1_FUNCTIONAL.md`](spec/SPEC_PART1_FUNCTIONAL.md) and [`SPEC_PART2_WORKFLOW.md`](spec/SPEC_PART2_WORKFLOW.md)); classes move into this map when their source lands. The C++ classes under `app/src/main/cpp/` are present in source but not yet wired into the Gradle build (no CMake integration yet — that is the blueprint's M0 milestone).
+**Scope:** this map documents code that exists in the source tree today. The target end-state architecture is specified in [`docs/spec/ARCHITECTURE_BLUEPRINT.md`](spec/ARCHITECTURE_BLUEPRINT.md) (contracts: [`CONTRACTS.md`](spec/CONTRACTS.md); functional specs: [`SPEC_PART1_FUNCTIONAL.md`](spec/SPEC_PART1_FUNCTIONAL.md), [`SPEC_PART2_WORKFLOW.md`](spec/SPEC_PART2_WORKFLOW.md)); classes move into this map when their source lands. The old pre-blueprint C++ skeleton has been fully removed - `app/src/main/cpp/` now contains only new-engine modules (`core/`, `dsp/`) built to the blueprint, not yet wired into the Gradle build (that happens when the engine is ready to link; blueprint M0).
 
 ```mermaid
 classDiagram
@@ -12,379 +12,238 @@ classDiagram
     ComponentActivity <|-- MainActivity
     RoomDatabase <|-- DawDatabase
 
-    %% Native C++ Graph Nodes
-    AudioNode <|-- TrackNode
-    AudioNode <|-- GroupTrackNode
-    AudioNode <|-- ReturnTrackNode
-    AudioNode <|-- MasterNode
-    AudioNode <|-- DeviceNode
-
-    %% Native C++ Device Hierarchy
-    DeviceNode <|-- InstrumentNode
-    DeviceNode <|-- EffectNode
-
-    InstrumentNode <|-- SubtractiveSynth
-    InstrumentNode <|-- WavetableSynth
-    InstrumentNode <|-- FMSynth
-    InstrumentNode <|-- DrumRackNode
-    InstrumentNode <|-- AdvancedSamplerNode
-
-    EffectNode <|-- ParametricEQNode
-    EffectNode <|-- CompressorNode
-    EffectNode <|-- ReverbNode
-    EffectNode <|-- DelayNode
-    EffectNode <|-- ChorusNode
-    EffectNode <|-- TapeDelayNode
-    EffectNode <|-- LimiterNode
-    EffectNode <|-- MeteringNode
-
-    %% Sequencer Engines
-    PlaybackEngine <|-- ArrangementEngine
-
     %% ==========================================
     %% 1. NATIVE REAL-TIME C++ AUDIO ENGINE (NDK)
     %% ==========================================
-    class AudioNode {
-        <<abstract>>
-        #string id_
-        #NodeType type_
-        #bool isEnabled_
-        #bool isMuted_
-        #bool isSoloed_
-        +prepareToPlay(sampleRate: double, maxBlockSize: size_t)*
-        +process(ctx: ProcessContext, inBuffers: float**, outBuffers: float**)*
-        +releaseResources()*
-        +getId() string
-        +getType() NodeType
-        +setEnabled(enabled: bool)
-        +setMuted(muted: bool)
-        +setSoloed(soloed: bool)
+    %% ---- M0 core/ (NEW ENGINE - realtime infrastructure, CONTRACTS.md) ----
+    class SpscRing~T_Capacity~ {
+        <<single-producer single-consumer ring, acquire-release, cache-line-split indices>>
+        +tryPush(value: T) bool
+        +tryPop(out: T) bool
+        +freeSlots() size_t
+        +pending() size_t
     }
 
-    class TrackNode {
-        -int32_t trackIndex_
-        -DeviceChain deviceChain_
-        -float volumeDb_
-        -float pan_
-        -bool isArmed_
-        -SmoothedValue~float~ volumeSmoother_
-        -SmoothedValue~float~ panSmoother_
-        +prepareToPlay(sampleRate: double, maxBlockSize: size_t)
-        +process(ctx: ProcessContext, inBuffers: float**, outBuffers: float**)
-        +setVolumeDb(volumeDb: float)
-        +setPan(pan: float)
-        +setArmed(armed: bool)
-        +getDeviceChain() DeviceChain
-        +getMeterFrame() MeterFrame
+    class EngineMessage {
+        <<64-byte POD, seam-2 frozen layout>>
+        +MsgFamily family
+        +uint8_t op
+        +uint16_t flags
+        +uint32_t editSeq
+        +NodeUid nodeUid
+        +ParamKeyHash paramKeyHash
+        +uint32_t a
+        +int64_t samplePos
+        +double beat
+        +double v0
+        +double v1
+        +uint64_t b
     }
 
-    class GroupTrackNode {
-        -int32_t groupIndex_
-        -array~int32_t, 16~ childTrackIndices_
-        -size_t childCount_
-        -DeviceChain deviceChain_
-        -SmoothedValue~float~ volumeSmoother_
-        -SmoothedValue~float~ panSmoother_
-        +addChildTrack(trackIndex: int32_t) bool
-        +removeChildTrack(trackIndex: int32_t) bool
-        +process(ctx: ProcessContext, inBuffers: float**, outBuffers: float**)
+    class EventRing~Capacity~ {
+        <<lossless message channel; note-ON reserves its OFF slot>>
+        +tryPush(m: EngineMessage) bool
+        +tryPop(out: EngineMessage) bool
     }
 
-    class ReturnTrackNode {
-        -int32_t returnIndex_
-        -DeviceChain deviceChain_
-        -SmoothedValue~float~ volumeSmoother_
-        -SmoothedValue~float~ panSmoother_
-        +setVolumeDb(volumeDb: float)
-        +setPan(pan: float)
-        +getDeviceChain() DeviceChain
-        +process(ctx: ProcessContext, inBuffers: float**, outBuffers: float**)
+    class ParamMoveTable {
+        <<per-producer coalescing latest-wins table, per-slot seqlock>>
+        +set(uid, key, plain, editSeq) bool
+        +drainDirty(apply)
+        +reapplyNewerThan(graphSeq, apply)
+        +publishInstalledGraphSeq(seq)
+        +consumeOverflowFlag() bool
     }
 
-    class MasterNode {
-        -DeviceChain deviceChain_
-        -float volumeDb_
-        -float limiterCeilingDb_
-        -bool isLimiterEnabled_
-        -SmoothedValue~float~ volumeSmoother_
-        +setVolumeDb(volumeDb: float)
-        +setLimiterCeilingDb(ceilingDb: float)
-        +setLimiterEnabled(enabled: bool)
-        +getDeviceChain() DeviceChain
-        +getMasterMeterFrame() MeterFrame
-        +process(ctx: ProcessContext, inBuffers: float**, outBuffers: float**)
+    class Seqlock~T~ {
+        <<single-writer POD publication, Boehm fence discipline>>
+        +publish(value: T)
+        +read(out: T) uint32_t
+        +version() uint32_t
     }
 
-    class RoutingMatrix {
-        -array~array~SmoothedValue~float~, 8~, 64~ sendSmoothers_
-        -array~int, 64~ sidechainSources_
-        +prepare(sampleRate: double)
-        +setSendLevel(srcTrack: size_t, returnIndex: size_t, level: float)
-        +getNextSmoothedSend(srcTrack: size_t, returnIndex: size_t) float
-        +setSidechainRoute(destTrack: size_t, srcTrack: int)
-        +getSidechainSource(destTrack: size_t) int
+    class OfferSlot~T~ {
+        <<single-slot builder-to-RT handover; artifact carries its own epoch>>
+        +offer(built: T*) T*
+        +claim() T*
+        +ackRetired(epoch)
+        +retiredAcked(epoch) bool
     }
 
-    class AudioGraph {
-        -array~TrackNode, 64~ tracks_
-        -array~ReturnTrackNode, 8~ returnTracks_
-        -MasterNode masterNode_
-        -RoutingMatrix routingMatrix_
-        -AudioBufferPool bufferPool_
-        +prepare(sampleRate: double, maxBlockSize: size_t)
-        +process(ctx: ProcessContext, outputBuffers: float**)
-        +addTrack(id: string) TrackNode
-        +removeTrack(trackIndex: size_t) bool
-        +getTrack(index: size_t) TrackNode
-        +getReturnTrack(index: size_t) ReturnTrackNode
-        +getMasterNode() MasterNode
-        +getRoutingMatrix() RoutingMatrix
-        +collectMeterFrames(dest: MeterFrame*, maxFrames: size_t) size_t
-    }
-
-    class DeviceNode {
-        <<abstract>>
-        +setParameter(paramName: string, value: float)*
-        +getParameter(paramName: string) float*
-    }
-
-    class DeviceChain {
-        -array~DeviceNode, 16~ devices_
-        -size_t deviceCount_
-        +prepare(sampleRate: double, maxBlockSize: size_t)
-        +process(ctx: ProcessContext, inBuffers: float**, outBuffers: float**)
-        +addDevice(device: DeviceNode) bool
-        +removeDevice(index: size_t) bool
-        +getDevice(index: size_t) DeviceNode
-        +getDeviceCount() size_t
-    }
-
-    class InstrumentNode {
-        <<abstract>>
-        #int polyphony_
-        +noteOn(noteNumber: int, velocity: float)*
-        +noteOff(noteNumber: int)*
-        +allNotesOff()*
-        +setPitchBend(bendSemitones: float)*
-        +setModWheel(modWheel: float)*
-    }
-
-    class EffectNode {
-        <<abstract>>
-        #float mix_
-        #SmoothedValue~float~ dryWetSmoother_
-        +setDryWet(mix: float)
-        +getDryWet() float
-    }
-
-    class SubtractiveSynth {
-        +noteOn(noteNumber: int, velocity: float)
-        +noteOff(noteNumber: int)
-        +setFilterCutoff(cutoffHz: float)
-        +setFilterResonance(resonance: float)
-    }
-
-    class WavetableSynth {
-        +setTablePosition(pos: float)
-        +setWarpMode(mode: int)
-        +noteOn(noteNumber: int, velocity: float)
-    }
-
-    class FMSynth {
-        +setAlgorithm(algorithm: int)
-        +setOperatorRatio(op: int, ratio: float)
-        +setOperatorLevel(op: int, level: float)
-    }
-
-    class DrumRackNode {
-        +triggerPad(padIndex: int, velocity: float)
-        +setPadSample(padIndex: int, sampleBuffer: float*, numFrames: size_t)
-    }
-
-    class AdvancedSamplerNode {
-        +loadSample(buffer: float*, numFrames: size_t, sampleRate: double)
-        +setLoopRegion(startFrame: size_t, endFrame: size_t)
-        +noteOn(noteNumber: int, velocity: float)
-    }
-
-    class ParametricEQNode {
-        +setBand(index: int, type: int, freqHz: float, q: float, gainDb: float)
-    }
-
-    class CompressorNode {
-        +setThresholdDb(thresholdDb: float)
-        +setRatio(ratio: float)
-        +setAttackMs(attackMs: float)
-        +setReleaseMs(releaseMs: float)
-    }
-
-    class ReverbNode {
-        +setRoomSize(size: float)
-        +setDamping(damping: float)
-        +setPreDelayMs(ms: float)
-    }
-
-    class DelayNode {
-        +setDelayTimeMs(ms: float)
-        +setFeedback(feedback: float)
-        +setPingPong(enabled: bool)
-    }
-
-    class ChorusNode {
-        +setRate(rate: float)
-        +setDepth(depth: float)
-    }
-
-    class TapeDelayNode {
-        +setDelayTime(ms: float)
-        +setFeedback(fb: float)
-        +setWowDepth(depth: float)
-    }
-
-    class LimiterNode {
-        +setCeilingDb(ceilingDb: float)
-        +setLookaheadMs(ms: float)
-    }
-
-    class MeteringNode {
-        +getMeterFrame() MeterFrame
-    }
-
-    class TransportEngine {
-        -double currentBeat_
-        -double samplePosition_
-        -float bpm_
-        -int timeSigNum_
-        -int timeSigDen_
-        -bool isPlaying_
-        -bool isLooping_
-        +advance(numFrames: size_t, sampleRate: double)
-        +seekToBeat(beat: double)
-        +setBpm(bpm: float)
-        +setLoop(startBeat: double, endBeat: double)
-    }
-
-    class PlaybackEngine {
-        <<abstract>>
-        +evaluate(startBeat: double, endBeat: double, track: TrackNode)*
-    }
-
-    class ArrangementEngine {
-        +evaluate(startBeat: double, endBeat: double, track: TrackNode)
-    }
-
-    class ProcessContext {
-        +size_t numChannels
-        +size_t numFrames
-        +double sampleRate
-        +double currentBeat
-        +double samplePosition
-        +bool isPlaying
-        +bool isRecording
+    class SmoothedValue {
+        <<linear ramp, exact arrival, state migrates across swaps>>
+        +prepare(sampleRate, smoothingMs)
+        +snap(value: float)
+        +setTarget(value: float)
+        +getNext() float
+        +skip(n: int)
+        +isSmoothing() bool
     }
 
     class AudioBufferPool {
-        +prepare(maxBlockSize: size_t, channelCount: size_t)
-        +acquireBuffer() float**
-        +releaseBuffer(buffer: float**)
+        <<builder-allocated stereo scratch buffers, RT freelist>>
+        +prepare(count: int)
+        +acquire() Buffer*
+        +release(b: Buffer*)
+        +available() int
     }
 
-    class ScopedNoDenormals {
-        -uint32_t savedFpscr_
-        +ScopedNoDenormals()
-        +~ScopedNoDenormals()
-    }
-
-    class SmoothedValue~T~ {
-        +setRampFrames(frames: int)
-        +setTarget(target: T)
-        +getNext() T
-        +getTarget() T
-        +reset(initialValue: T)
+    class TimeAnchor {
+        <<per-callback clock anchor published via Seqlock>>
+        +int64_t framePosition
+        +int64_t monotonicNanos
+        +double sampleRate
+        +framesAt(nanos: int64_t) int64_t
     }
 
     class MeterFrame {
-        +int32_t trackId
+        <<32-byte lossy metering POD>>
+        +NodeUid uid
         +float peakL
         +float peakR
         +float rmsL
         +float rmsR
-        +float truePeak
         +float gainReductionDb
-        +bool isClipping
+        +uint16_t flags
+        +uint16_t seq
     }
 
-    class EngineCommand {
-        +CommandType type
-        +int16_t trackIndex
-        +int16_t deviceIndex
-        +int16_t paramId
-        +int16_t noteNumber
-        +float floatValue1
-        +float floatValue2
-        +int32_t intValue1
-        +int32_t intValue2
+    class RtRandom {
+        <<xorshift64* + musical seed (clipUid, quantizedPos, loopPassIndex)>>
+        +reseed(seed)
+        +nextU64() uint64_t
+        +nextFloat01() float
+        +chance(p: float) bool
+        +musicalSeed(clipUid, quantizedPos, loopPassIndex) uint64_t
     }
 
-    %% Native DSP primitives & support types (header-only helpers used
-    %% inside the nodes above; listed for completeness of the map)
-    class LockFreeQueue~T_Capacity~ {
-        <<SPSC ring buffer>>
+    class FixedVector~T_Capacity~ {
+        <<inline-storage POD vector, no heap>>
+        +push_back(value: T) bool
+        +eraseUnordered(i: size_t)
+        +clear()
+        +size() size_t
     }
+
+    class ScopedNoDenormals {
+        <<RAII FTZ-DAZ guard: ARM64 FPCR bit 24, x86 MXCSR bits 15 and 6>>
+        +ScopedNoDenormals()
+        +~ScopedNoDenormals()
+    }
+
+    %% ---- M0 dsp/ (NEW ENGINE - pure DSP primitives, host-compilable) ----
     class Oscillator {
-        <<band-limited osc core>>
+        <<polyBLEP band-limited: sine, saw, pulse (PWM), triangle; hard sync>>
+        +prepare(sampleRate)
+        +setWave(w: Wave)
+        +setFrequency(hz: float)
+        +setPulseWidth(pw: float)
+        +sync(phase)
+        +process() float
     }
-    class MoogLadderFilter {
-        <<4-pole ladder LPF>>
+    class NoiseGen {
+        <<white + Kellet pink (-3 dB/oct)>>
+        +white() float
+        +pink() float
+        +reseed(seed)
     }
-    class CombFilter {
-        <<reverb comb stage>>
+    class SvfFilter {
+        <<Simper trapezoidal ZDF SVF - audio-rate-mod safe; LP/BP/HP/notch/peak/AP>>
+        +prepare(sampleRate)
+        +setMode(m: Mode)
+        +setParams(cutoffHz, q)
+        +process(in: float) float
     }
-    class AllpassFilter {
-        <<reverb allpass stage>>
+    class BiquadFilter {
+        <<TDF-II + RBJ cookbook designs - static EQ bands, shelves, crossovers>>
+        +prepare(sampleRate)
+        +design(type, freqHz, q, gainDb)
+        +process(in: float) float
     }
-    class AudioFileDecoder {
-        <<WAV decode>>
+    class AdsrEnvelope {
+        <<analog-style one-pole segments with overshoot targets>>
+        +prepare(sampleRate)
+        +setTimes(attackMs, decayMs, sustain, releaseMs)
+        +noteOn()
+        +noteOff()
+        +process() float
+        +isActive() bool
     }
-    class Resampler {
-        <<rate conversion>>
+    class Lfo {
+        <<sine/tri/saws/square/S&H/smooth-random, seedable for render parity>>
+        +prepare(sampleRate)
+        +setShape(s: Shape)
+        +setFrequency(hz)
+        +process() float
     }
-    class FFTProcessor {
-        <<radix-2 FFT>>
+    class DelayLine {
+        <<power-of-2 mono history; integer, linear and cubic-Hermite reads>>
+        +prepare(maxDelaySamples)
+        +write(in: float)
+        +read(delay: int) float
+        +readLinear(delay: float) float
+        +readHermite(delay: float) float
     }
-    class SubtractiveVoice {
-        <<voice struct>>
+    %% ---- M0 engine/ (NEW ENGINE - driver + callback spine) ----
+    class StreamTime {
+        <<per-callback DAC anchor from Oboe stream timestamps>>
+        +int64_t framePosition
+        +int64_t monotonicNanos
+        +bool valid
     }
-    class WavetableVoice {
-        <<voice struct>>
+    class RenderSink {
+        <<abstract>>
+        +render(outputs, numFrames <= kMaxBlock, input: InputJitterRing, time: StreamTime)*
     }
-    class FMVoice {
-        <<voice struct>>
+    class InputJitterRing {
+        <<duplex input smoothing: 2-burst prime, zero-fill underfill, drop-oldest overfill, counters>>
+        +prepare(capacityFrames, channels, primeFrames)
+        +push(interleaved, frames)
+        +consume(deinterleaved, frames)
+        +primed() bool
     }
-    class FMOperatorConfig {
-        <<operator params>>
+    class OboeDriver {
+        <<output-driven full duplex per D2: output stream w/ callback (LowLatency, Exclusive->Shared, native rate), callback-less input matched+2x capacity, non-blocking drain, sub-chunks bursts to kMaxBlock, latency reports, reopen flag on route change>>
+        +open(sink: RenderSink, cfg: Config) bool
+        +start() bool
+        +stop()
+        +close()
+        +sampleRate() double
+        +outputLatencyMs() double
+        +inputLatencyMs() double
+        +xrunCount() int32_t
+        +needsReopen() bool
+        +onAudioReady(stream, audioData, numFrames) DataCallbackResult
     }
-    class DrumPadVoice {
-        <<pad voice struct>>
+    class TransportClockData {
+        <<per-block transport snapshot published via Seqlock>>
+        +int64_t samplePos
+        +double beat
+        +double bpm
+        +uint32_t flags
     }
-    class SamplerVoice {
-        <<voice struct>>
+    class AudioEngine {
+        <<facade + RT callback spine: anchor publish -> bounded ring drains -> param-table drain (values retained for post-swap reapply) -> input consume -> render (silence until M2 graph) -> clock publish. Seams open for TransportEngine (M1), PlaybackGraph (M2), instruments (M4)>>
+        +start(cfg: OboeDriver.Config) bool
+        +stop()
+        +jniEvents() EventRing
+        +jniParams() ParamMoveTable
+        +midiEvents() EventRing
+        +midiParams() ParamMoveTable
+        +popMeter(out: MeterFrame) bool
+        +clock() TransportClockData
+        +anchor() TimeAnchor
+        +render(outputs, numFrames, input, time)
     }
-    class ADSRData {
-        <<envelope params>>
-    }
-    class BiquadCoeffs {
-        <<EQ band coeffs>>
-    }
-    class BiquadState {
-        <<EQ band state>>
-    }
-    class NativeMidiNote {
-        <<sequencer event struct>>
-    }
-    class NativeArrangementClip {
-        <<sequencer clip struct>>
-    }
+
+    RenderSink <|-- AudioEngine
+    OboeDriver ..> RenderSink
+    OboeDriver *-- InputJitterRing
+    AudioEngine *-- OboeDriver
+    AudioEngine *-- ParamMoveTable
+    AudioEngine ..> EngineMessage
+    AudioEngine ..> MeterFrame
+    AudioEngine ..> TimeAnchor
 
     %% ==========================================
     %% 2. APP ENTRY POINT & WORKSPACE SCREENS (EARTH.DESIGN)
@@ -892,18 +751,6 @@ classDiagram
     %% ==========================================
     %% 7. RELATIONSHIPS & DEPENDENCY FLOW
     %% ==========================================
-    AudioGraph *-- TrackNode
-    AudioGraph *-- GroupTrackNode
-    AudioGraph *-- ReturnTrackNode
-    AudioGraph *-- MasterNode
-    AudioGraph *-- RoutingMatrix
-    AudioGraph *-- AudioBufferPool
-
-    TrackNode *-- DeviceChain
-    GroupTrackNode *-- DeviceChain
-    ReturnTrackNode *-- DeviceChain
-    MasterNode *-- DeviceChain
-    DeviceChain *-- DeviceNode
 
     MainActivity ..> MainDawScreen
     MainDawScreen ..> ProjectStore
