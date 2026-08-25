@@ -2,6 +2,8 @@
 
 This document is the **authoritative living map of the codebase**, maintained and kept continuously synchronized with every class, interface, method, and relationship implemented across the architecture (both Native C++ NDK DSP Engine and Kotlin UDF Layer).
 
+**Scope:** this map documents code that exists in the source tree today. The target end-state architecture (including the not-yet-implemented `AudioEngine`, `SessionEngine`, `AutomationEngine`, and the `NativeAudioBridge` JNI layer) is specified in [`docs/spec/implementation_plan.md`](spec/implementation_plan.md); classes move into this map when their source lands. The C++ classes under `app/src/main/cpp/` are present in source but not yet wired into the Gradle build (no CMake integration yet — that is the next milestone).
+
 ```mermaid
 classDiagram
     %% ==========================================
@@ -31,29 +33,17 @@ classDiagram
     EffectNode <|-- CompressorNode
     EffectNode <|-- ReverbNode
     EffectNode <|-- DelayNode
+    EffectNode <|-- ChorusNode
+    EffectNode <|-- TapeDelayNode
     EffectNode <|-- LimiterNode
     EffectNode <|-- MeteringNode
 
     %% Sequencer Engines
     PlaybackEngine <|-- ArrangementEngine
-    PlaybackEngine <|-- SessionEngine
 
     %% ==========================================
     %% 1. NATIVE REAL-TIME C++ AUDIO ENGINE (NDK)
     %% ==========================================
-    class AudioEngine {
-        -AudioGraph audioGraph_
-        -TransportEngine transport_
-        -AudioBufferPool bufferPool_
-        -LockFreeQueue~EngineCommand, 1024~ commandQueue_
-        -LockFreeQueue~MeterFrame, 128~ meterQueue_
-        +start() bool
-        +stop()
-        +processAudio(float** outputBuffers, size_t numFrames)
-        +postCommand(EngineCommand cmd) bool
-        +pollMeters(MeterFrame* dest, size_t maxFrames) size_t
-    }
-
     class AudioNode {
         <<abstract>>
         #string id_
@@ -240,6 +230,17 @@ classDiagram
         +setPingPong(enabled: bool)
     }
 
+    class ChorusNode {
+        +setRate(rate: float)
+        +setDepth(depth: float)
+    }
+
+    class TapeDelayNode {
+        +setDelayTime(ms: float)
+        +setFeedback(fb: float)
+        +setWowDepth(depth: float)
+    }
+
     class LimiterNode {
         +setCeilingDb(ceilingDb: float)
         +setLookaheadMs(ms: float)
@@ -270,16 +271,6 @@ classDiagram
 
     class ArrangementEngine {
         +evaluate(startBeat: double, endBeat: double, track: TrackNode)
-    }
-
-    class SessionEngine {
-        +launchClip(track: int, slot: int)
-        +launchScene(sceneIndex: int)
-        +evaluate(startBeat: double, endBeat: double, track: TrackNode)
-    }
-
-    class AutomationEngine {
-        +evaluateBlock(startBeat: double, endBeat: double, numFrames: size_t)
     }
 
     class ProcessContext {
@@ -335,13 +326,64 @@ classDiagram
         +int32_t intValue2
     }
 
-    class NativeAudioBridge {
-        <<singleton>>
-        +initEngine(sampleRate: int, bufferSize: int)
-        +startEngine()
-        +stopEngine()
-        +postCommand(cmd: EngineCommand)
-        +pollMeterData(dest: FloatArray) int
+    %% Native DSP primitives & support types (header-only helpers used
+    %% inside the nodes above; listed for completeness of the map)
+    class LockFreeQueue~T_Capacity~ {
+        <<SPSC ring buffer>>
+    }
+    class Oscillator {
+        <<band-limited osc core>>
+    }
+    class MoogLadderFilter {
+        <<4-pole ladder LPF>>
+    }
+    class CombFilter {
+        <<reverb comb stage>>
+    }
+    class AllpassFilter {
+        <<reverb allpass stage>>
+    }
+    class AudioFileDecoder {
+        <<WAV decode>>
+    }
+    class Resampler {
+        <<rate conversion>>
+    }
+    class FFTProcessor {
+        <<radix-2 FFT>>
+    }
+    class SubtractiveVoice {
+        <<voice struct>>
+    }
+    class WavetableVoice {
+        <<voice struct>>
+    }
+    class FMVoice {
+        <<voice struct>>
+    }
+    class FMOperatorConfig {
+        <<operator params>>
+    }
+    class DrumPadVoice {
+        <<pad voice struct>>
+    }
+    class SamplerVoice {
+        <<voice struct>>
+    }
+    class ADSRData {
+        <<envelope params>>
+    }
+    class BiquadCoeffs {
+        <<EQ band coeffs>>
+    }
+    class BiquadState {
+        <<EQ band state>>
+    }
+    class NativeMidiNote {
+        <<sequencer event struct>>
+    }
+    class NativeArrangementClip {
+        <<sequencer clip struct>>
     }
 
     %% ==========================================
@@ -420,6 +462,20 @@ classDiagram
         +Color TextDisabled
     }
 
+    class EarthColors {
+        <<data class>>
+        +Color bgObsidian
+        +Color glassBase
+        +Color glassSurface
+        +Color primaryAmber
+        +Color autumnRust
+        +Color autumnTerracotta
+        +Color autumnHarvestGold
+        +Color natureForestPine
+        +Color natureEmerald
+        +Color natureMossSage
+    }
+
     class EarthGlassTokens {
         <<object>>
         +GlassElevation Level1Dock
@@ -437,6 +493,13 @@ classDiagram
         +TextStyle paramLabel
         +TextStyle paramValue
         +TextStyle microBadge
+    }
+
+    class EarthTheme {
+        <<composable + object>>
+        +EarthTheme(colors: EarthColors, typography: EarthTypography, content)
+        +EarthColors colors
+        +EarthTypography typography
     }
 
     class EarthTransportBar {
@@ -773,6 +836,15 @@ classDiagram
         +toggleDrumStep(pad: DrumPadType, stepBeat: Float)
     }
 
+    class BrowserItem {
+        <<data class>>
+        +String id
+        +String name
+        +BrowserCategory category
+        +List~String~ tags
+        +String author
+    }
+
     class SoundBrowserStateHolder {
         +StateFlow~BrowserUiState~ state
         +selectCategory(cat: BrowserCategory)
@@ -820,12 +892,6 @@ classDiagram
     %% ==========================================
     %% 7. RELATIONSHIPS & DEPENDENCY FLOW
     %% ==========================================
-    AudioEngine *-- AudioGraph
-    AudioEngine *-- TransportEngine
-    AudioEngine *-- AudioBufferPool
-    AudioEngine ..> EngineCommand
-    AudioEngine ..> MeterFrame
-
     AudioGraph *-- TrackNode
     AudioGraph *-- GroupTrackNode
     AudioGraph *-- ReturnTrackNode
@@ -838,8 +904,6 @@ classDiagram
     ReturnTrackNode *-- DeviceChain
     MasterNode *-- DeviceChain
     DeviceChain *-- DeviceNode
-
-    NativeAudioBridge ..> AudioEngine
 
     MainActivity ..> MainDawScreen
     MainDawScreen ..> ProjectStore
