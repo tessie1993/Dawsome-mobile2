@@ -14,7 +14,7 @@ roomCompiler = "2.7.0"
 kotlinxCoroutinesTest = "1.10.2"
 kotlinxCoroutinesAndroid = "1.10.2"
 kotlinxCoroutinesCore = "1.10.2"
-oboe = "1.5.1"
+oboe = "1.5.0"
 
 [libraries]
 oboe = { group = "com.google.oboe", name = "oboe", version.ref = "oboe" }
