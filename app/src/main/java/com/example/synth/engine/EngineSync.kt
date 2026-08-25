@@ -118,9 +118,13 @@ class EngineSync(
             is ProjectAction.SetDeviceParam -> sendParam(
                 WireProtocol.makeNodeUid(WireProtocol.NODE_KIND_DEVICE, action.deviceId),
                 action.paramName, action.value.toDouble(), editSeq)
-            is ProjectAction.SetMasterVolume -> sendParam(
-                WireProtocol.masterNodeUid, ParamKeys.MIXER_VOLUME,
-                state.masterVolumeDb.toDouble(), editSeq)
+            is ProjectAction.SetMasterVolume -> {
+                // Param for the live strip; the type-4 track delta bakes the
+                // value into the model so rebuilt graphs start correct.
+                sendParam(WireProtocol.masterNodeUid, ParamKeys.MIXER_VOLUME,
+                    state.masterVolumeDb.toDouble(), editSeq)
+                sendMasterUpsert(state, editSeq)
+            }
 
             // ---- structure edits -> ModelDelta bundles ------------------------
             is ProjectAction.AddTrack -> {
@@ -184,7 +188,20 @@ class EngineSync(
                 scene.index)
         }
         for (t in state.tracks) encodeTrackFull(d, state, t)
+        encodeMaster(d, state)
         controller.sendModelDelta(d.build())
+    }
+
+    private fun sendMasterUpsert(state: ProjectState, editSeq: Int) {
+        val d = DeltaEncoder(editSeq)
+        encodeMaster(d, state)
+        controller.sendModelDelta(d.build())
+    }
+
+    /** The master lane as a type-4 track row keyed by the well-known uid. */
+    private fun encodeMaster(d: DeltaEncoder, state: ProjectState) {
+        d.upsertTrack(WireProtocol.masterNodeUid, type = 4, flags = 0, order = 0xFFFF,
+            volumeDb = state.masterVolumeDb, pan = 0f, sendA = 0f, sendB = 0f)
     }
 
     /** Re-send every addressable param value from the current model. */

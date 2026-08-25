@@ -6,6 +6,38 @@ Newest entry first. Each entry: where the build stands, what comes next.
 
 ---
 
+## 2026-08-25 — M2 COMPLETE (feature 3: RT swap + live mixer loop)
+
+The graph-and-mixer milestone closes. AudioEngine's render now runs the
+whole dual-model protocol: claim graph -> executeAdopt (old graph valid
+until ack) -> install -> ack(retired ?: epoch-1, releasing never-claimed
+predecessors) -> publishInstalledGraphSeq to both param tables ->
+reapplyNewerThan through the NEW resolver; live drains resolve through the
+installed graph (misses = counted seam-4 skew); render goes through
+processBlock with Main-bus copy-out; graph meters drain to the MeterBus.
+Master volume closed end-to-end: EngineSync sends a type-4 track row keyed
+by the well-known master uid so rebuilt graphs start correct (params alone
+could be reclaimed as "baked" without being in the model).
+
+Kotlin: MixerStateHolder grew a `meters` flow (uid -> track-id remap via
+makeNodeUid, "master" key, separate from edit state so meter ticks don't
+recompose strips); MixerScreen strips + master feed StereoLedLevelMeter
+from live MeterReadings (dark when the engine is absent); MainDawScreen
+takes an optional EngineReadback and MainActivity passes DawRuntime's.
+
+Documented M2 deferrals: GroupTrackNode + RoutingTable wait for group
+tracks / Routing deltas in the model (fixed topology today: tracks ->
+master, sendA/B -> returns 1/2 -> master); Cue stays folded into Main until
+routable sources (metronome M4, preview M14) exist. M3 TODO recorded:
+device params need a model home (DeviceDeltaPayload params blob or
+BlockSet) so rebuilds bake them - mixer params are covered via track rows.
+Map: 155 classes, sweep green.
+
+**Next (M3, blueprint §11):** DeviceNode chains (DeviceChain with
+latency-preserving bypass), ParamRegistry (hostside collision assert),
+VoiceAllocator + VoiceBudgetLedger, preset plumbing, racks/macros core,
+QualityMode - then M4 first sound (SubtractiveSynth + MetronomeNode).
+
 ## 2026-08-25 — M2 features 1+2 done: device contract + compiled graph
 
 Feature 1: `device/DeviceNode.h` (seams 1/3/6 verbatim: ProcessContext,

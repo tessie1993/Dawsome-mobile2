@@ -392,7 +392,7 @@ classDiagram
         +uint32_t flags
     }
     class AudioEngine {
-        <<facade + RT callback spine: anchor publish -> bounded ring drains (transport ops -> TransportEngine) -> param-table drain (values retained for post-swap reapply) -> transport advance (base claim + loop-wrap spans) -> input consume -> render (silence until M2 graph) -> clock publish from real transport. Same-rate reopen keeps transport state; rate change re-prepares. Seams open: PlaybackGraph (M2), instruments (M4)>>
+        <<facade + RT callback spine: anchor publish -> BLOCK-BOUNDARY SWAPS (PlaybackGraph claim: executeAdopt while the old graph is still valid, install, ack retired ?: epoch-1, publishInstalledGraphSeq to both tables, reapplyNewerThan through the NEW resolver; TimelineSnapshot claim + scheduler reconcile) -> drains (param moves resolve through the installed graph, misses = counted seam-4 skew) -> transport advance + MIDI scheduling per span -> input consume -> graph processBlock (Main bus -> driver outs; silence before first claim) -> meters to MeterBus -> clock publish. Same-rate reopen keeps transport state. Instruments write into track buffers from M4>>
         +start(cfg: OboeDriver.Config) bool
         +stop()
         +jniEvents() EventRing
@@ -734,7 +734,7 @@ classDiagram
 
     class MainDawScreen {
         <<composable>>
-        +MainDawScreen(store: ProjectStore, modifier: Modifier)
+        +MainDawScreen(store: ProjectStore, readback: EngineReadback?, modifier: Modifier)
     }
 
     class ArrangerScreen {
@@ -1150,7 +1150,9 @@ classDiagram
     }
 
     class MixerStateHolder {
+        <<first UI consumer of the engine readback path: `meters` remaps EngineReadback's uid-keyed MeterReadings to track ids (+ "master") via makeNodeUid, kept SEPARATE from `state` so ~30Hz ticks never recompose the edit-driven strips; empty when the engine is unavailable>>
         +StateFlow~MixerUiState~ state
+        +StateFlow~Map_String_MeterReading~ meters
         +selectTrack(trackId: String)
         +setTrackVolume(trackId: String, volumeDb: Float)
         +setTrackPan(trackId: String, pan: Float)
@@ -1160,6 +1162,10 @@ classDiagram
         +setSend(trackId: String, sendIndex: Int, level: Float)
         +setMasterVolume(volumeDb: Float)
     }
+
+    MixerStateHolder ..> EngineReadback
+    MixerStateHolder ..> MeterReading
+    MixerStateHolder ..> WireProtocol
 
     class DeviceRackStateHolder {
         +StateFlow~DeviceRackUiState~ state

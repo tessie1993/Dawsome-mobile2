@@ -265,15 +265,17 @@ void GraphBuilder::buildGraph() {
               });
 
     std::vector<std::pair<NodeUid, const ModelTrack*>> regular, returnRows;
+    const ModelTrack* masterRow = nullptr;   // Kotlin sends master as a type-4 row
     for (const auto& row : ordered) {
         const uint8_t type = row.second->type;
         if (type == 3) {
             if (returnRows.size() < size_t(kMaxReturns)) returnRows.push_back(row);
         } else if (type <= 2) {
             if (regular.size() < size_t(kMaxTracks)) regular.push_back(row);
+        } else if (type == 4) {
+            masterRow = row.second;          // strip values for the master lane
         }
-        // type 4 (master rows) never exists as an entity - the master strip
-        // is synthesized; type 5 (groups) joins with group tracks.
+        // type 5 (groups) joins with group tracks.
     }
 
     // Arena: one stereo lane per regular track, per return, plus the master.
@@ -353,7 +355,7 @@ void GraphBuilder::buildGraph() {
         ++lane;
     }
 
-    makeStrip(g->master, kMasterNodeUid, nullptr, lane, 4);
+    makeStrip(g->master, kMasterNodeUid, masterRow, lane, 4);
     g->mixL = g->master.bufL;
     g->mixR = g->master.bufR;
     g->mainL = g->mixL;

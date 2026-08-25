@@ -22,6 +22,7 @@ import androidx.compose.ui.unit.sp
 import com.example.synth.domain.DawTab
 import com.example.synth.domain.ProjectAction
 import com.example.synth.domain.ProjectStore
+import com.example.synth.engine.EngineReadback
 import com.example.ui.components.earth.EarthTransportBar
 import com.example.ui.screens.earth.*
 import com.example.ui.state.*
@@ -35,6 +36,7 @@ import com.example.ui.theme.earth.earthGlass
 @Composable
 fun MainDawScreen(
     store: ProjectStore = remember { ProjectStore() },
+    readback: EngineReadback? = null,
     modifier: Modifier = Modifier
 ) {
     val projectState by store.state.collectAsState()
@@ -43,7 +45,7 @@ fun MainDawScreen(
     val transportStateHolder = remember(store) { TransportStateHolder(store) }
     val arrangementStateHolder = remember(store) { ArrangementStateHolder(store) }
     val sessionStateHolder = remember(store) { SessionStateHolder(store) }
-    val mixerStateHolder = remember(store) { MixerStateHolder(store) }
+    val mixerStateHolder = remember(store, readback) { MixerStateHolder(store, readback) }
     val deviceRackStateHolder = remember(store) { DeviceRackStateHolder(store) }
     val pianoRollStateHolder = remember(store) { PianoRollStateHolder(store) }
     val browserStateHolder = remember(store) { SoundBrowserStateHolder(store) }

@@ -87,6 +87,9 @@ public:
     const MidiScheduler& midi() const noexcept { return midiScheduler_; }
     uint64_t droppedNotes() const noexcept { return droppedNotes_.load(std::memory_order_relaxed); }
     uint64_t panics() const noexcept { return panics_.load(std::memory_order_relaxed); }
+    // Param applies that resolved to nothing in the installed graph (seam-4
+    // skew; transient by design, converges at the next swap).
+    uint32_t paramSkews() const noexcept { return paramSkews_; }
 
     // ---- RenderSink [RT] ----------------------------------------------------
     void render(float* const* outputs, int numFrames,
@@ -128,6 +131,7 @@ private:
 
     std::atomic<uint64_t> droppedNotes_{0};
     std::atomic<uint64_t> panics_{0};
+    uint32_t paramSkews_ = 0;   // RT-written; read is best-effort diagnostics
 };
 
 } // namespace daw

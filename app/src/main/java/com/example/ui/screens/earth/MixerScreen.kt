@@ -22,6 +22,7 @@ import com.example.ui.components.earth.BiDirectionalPanKnob
 import com.example.ui.components.earth.MicroEncoder
 import com.example.ui.components.earth.PrecisionCrystalFader
 import com.example.ui.components.earth.SoloMuteArmToggles
+import com.example.synth.engine.MeterReading
 import com.example.ui.components.earth.StereoLedLevelMeter
 import com.example.ui.state.MixerStateHolder
 import com.example.ui.theme.earth.EarthColorTokens
@@ -37,6 +38,7 @@ fun MixerScreen(
     modifier: Modifier = Modifier
 ) {
     val state by mixerStateHolder.state.collectAsState()
+    val meters by mixerStateHolder.meters.collectAsState()
     val scrollState = rememberScrollState()
 
     Row(
@@ -51,6 +53,7 @@ fun MixerScreen(
         state.tracks.forEach { track ->
             MixerChannelStrip(
                 track = track,
+                meter = meters[track.id],
                 isSelected = track.id == state.selectedTrackId,
                 onSelect = { mixerStateHolder.selectTrack(track.id) },
                 onVolumeChange = { mixerStateHolder.setTrackVolume(track.id, it) },
@@ -66,6 +69,7 @@ fun MixerScreen(
         // Master Bus Strip (Right)
         MasterBusStrip(
             masterVolumeDb = state.masterVolumeDb,
+            meter = meters[MixerStateHolder.MASTER_METER_KEY],
             onVolumeChange = { mixerStateHolder.setMasterVolume(it) }
         )
     }
@@ -74,6 +78,7 @@ fun MixerScreen(
 @Composable
 private fun MixerChannelStrip(
     track: TrackModel,
+    meter: MeterReading?,
     isSelected: Boolean,
     onSelect: () -> Unit,
     onVolumeChange: (Float) -> Unit,
@@ -175,8 +180,8 @@ private fun MixerChannelStrip(
             )
             Spacer(modifier = Modifier.width(4.dp))
             StereoLedLevelMeter(
-                levelL = track.peakMeterL.coerceIn(0.1f, 0.95f),
-                levelR = track.peakMeterR.coerceIn(0.1f, 0.95f),
+                levelL = (meter?.peakL ?: 0f).coerceIn(0f, 1f),
+                levelR = (meter?.peakR ?: 0f).coerceIn(0f, 1f),
                 height = 140.dp
             )
         }
@@ -186,6 +191,7 @@ private fun MixerChannelStrip(
 @Composable
 private fun MasterBusStrip(
     masterVolumeDb: Float,
+    meter: MeterReading?,
     onVolumeChange: (Float) -> Unit
 ) {
     Column(
@@ -229,8 +235,8 @@ private fun MasterBusStrip(
             )
             Spacer(modifier = Modifier.width(4.dp))
             StereoLedLevelMeter(
-                levelL = 0.82f,
-                levelR = 0.80f,
+                levelL = (meter?.peakL ?: 0f).coerceIn(0f, 1f),
+                levelR = (meter?.peakR ?: 0f).coerceIn(0f, 1f),
                 height = 160.dp
             )
         }

@@ -17,7 +17,7 @@ class MainActivity : ComponentActivity() {
     setContent {
       EarthTheme {
         Surface(color = EarthColorTokens.BgObsidianDeep) {
-          MainDawScreen(store = DawRuntime.store)
+          MainDawScreen(store = DawRuntime.store, readback = DawRuntime.readback)
         }
       }
     }

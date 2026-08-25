@@ -97,28 +97,52 @@ void AudioEngine::render(float* const* outputs, int numFrames,
         anchor_.publish(a);
     }
 
-    // 2) Drain producer channels (bounded work per slice).
-    drainEvents(jniEvents_);
-    drainEvents(midiEvents_);
-    jniParams_.drainDirty([](NodeUid, ParamKeyHash, double, uint32_t) {
-        // Resolver arrives with the PlaybackGraph (M2). Values stay resident
-        // in the table for reapplyNewerThan() at the first graph install.
-    });
-    midiParams_.drainDirty([](NodeUid, ParamKeyHash, double, uint32_t) {});
-
-    // 3) Block-boundary swaps + transport advance + MIDI scheduling. Claim
-    //    any offered timeline (ack retires the predecessor - the builder
-    //    frees it only after this ack; the scheduler reconciles sounding
-    //    notes against the new snapshot); the transport's advance() claims
-    //    offered tempo bases the same way and splits the block at a loop
-    //    wrap. Scheduled events feed instruments from M4.
+    // 2) Block-boundary swaps FIRST, so this block's drains apply to the
+    //    graph that will render it.
+    //    - PlaybackGraph: executeAdopt (bounded POD moves, old graph still
+    //      valid), install, ack the retired epoch (first-ever claim acks
+    //      epoch-1 so older never-claimed artifacts release), publish the
+    //      installed graph's editSeq to both param tables, re-apply retained
+    //      values newer than it through the NEW resolver (blueprint 2.2).
+    //    - TimelineSnapshot: install + ack; the scheduler reconciles
+    //      sounding notes against the new snapshot.
     midiScheduler_.beginBlock();
+    if (PlaybackGraph* ng = graphOffer_.claim()) {
+        ng->migration.executeAdopt();
+        const uint64_t retiredEpoch = graph_ != nullptr ? graph_->epoch : ng->epoch - 1;
+        graph_ = ng;
+        graphOffer_.ackRetired(retiredEpoch);
+        jniParams_.publishInstalledGraphSeq(ng->builtFromEditSeq);
+        midiParams_.publishInstalledGraphSeq(ng->builtFromEditSeq);
+        auto reapply = [this](NodeUid uid, ParamKeyHash key, double plain, uint32_t) {
+            if (!graph_->resolver.apply(uid, key, static_cast<float>(plain)))
+                ++paramSkews_;
+        };
+        jniParams_.reapplyNewerThan(ng->builtFromEditSeq, reapply);
+        midiParams_.reapplyNewerThan(ng->builtFromEditSeq, reapply);
+    }
     if (TimelineSnapshot* ts = timelineOffer_.claim()) {
         const TimelineSnapshot* retired = timeline_;
         timeline_ = ts;
         if (retired != nullptr) timelineOffer_.ackRetired(retired->epoch);
         midiScheduler_.onTimelineSwap(timeline_);
     }
+
+    // 3) Drain producer channels (bounded work per slice). Param moves
+    //    resolve through the installed graph; a miss is seam-4 skew
+    //    (counted, converges at the next swap). With no graph yet, values
+    //    stay resident in the tables for the first install's re-apply.
+    drainEvents(jniEvents_);
+    drainEvents(midiEvents_);
+    auto applyParam = [this](NodeUid uid, ParamKeyHash key, double plain, uint32_t) {
+        if (graph_ != nullptr && !graph_->resolver.apply(uid, key, static_cast<float>(plain)))
+            ++paramSkews_;
+    };
+    jniParams_.drainDirty(applyParam);
+    midiParams_.drainDirty(applyParam);
+
+    // 4) Advance the transport (claims offered tempo bases, splits at loop
+    //    wraps) and schedule MIDI per span; events feed instruments at M4.
     TransportSpan spans[2];
     const int spanCount = transport_.advance(numFrames, spans);
     for (int s = 0; s < spanCount; ++s) {
@@ -126,15 +150,32 @@ void AudioEngine::render(float* const* outputs, int numFrames,
                                     transport_.tempoMap(), transport_.playing());
     }
 
-    // 4) Keep the duplex input flowing (monitor/record taps arrive M2/M6).
+    // 5) Keep the duplex input flowing (monitor/record taps arrive at M6).
     float* ins[kMaxChannels] = { inScratchL_, inScratchR_ };
     input.consume(ins, numFrames);
 
-    // 5) Render: silence until the PlaybackGraph lands (M2).
-    for (int c = 0; c < kMaxChannels; ++c)
-        for (int f = 0; f < numFrames; ++f) outputs[c][f] = 0.0f;
+    // 6) Render through the installed graph; silence before the first claim.
+    if (graph_ != nullptr) {
+        RenderFacts facts;
+        facts.sampleRate = driver_.sampleRate();
+        facts.blockStartSample = spans[0].startSample;
+        facts.blockStartBeat = spans[0].startBeat;
+        facts.bpm = transport_.bpm();
+        facts.playing = transport_.playing();
+        facts.recording = transport_.recording();
+        graph_->processBlock(numFrames, facts);
 
-    // 6) Publish the block clock from the real transport.
+        for (int f = 0; f < numFrames; ++f) {
+            outputs[0][f] = graph_->mainL[f];
+            outputs[1][f] = graph_->mainR[f];
+        }
+        for (const MeterFrame& mf : graph_->pendingMeters) meterBus_.tryPush(mf);
+    } else {
+        for (int c = 0; c < kMaxChannels; ++c)
+            for (int f = 0; f < numFrames; ++f) outputs[c][f] = 0.0f;
+    }
+
+    // 7) Publish the block clock from the real transport.
     TransportClockData d;
     d.samplePos = transport_.positionSamples();
     d.beat = transport_.positionBeat();
