@@ -3,6 +3,7 @@
 #include <cmath>
 
 #include "../core/ScopedNoDenormals.h"
+#include "../device/DeviceRegistry.h"
 #include "../graph/GraphBuilder.h"
 
 namespace daw {

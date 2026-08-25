@@ -6,6 +6,7 @@
 #include <new>
 
 #include "../engine/AudioEngine.h"
+#include "../graph/GraphBuilder.h"
 #include "CommandCodec.h"
 #include "DeltaSchemas.h"
 #include "ReadbackWire.h"
@@ -256,20 +257,20 @@ jboolean nativeConsumeParamOverflow(JNIEnv*, jobject, jlong handle) {
     return b->engine.jniParams().consumeOverflowFlag() ? JNI_TRUE : JNI_FALSE;
 }
 
+// JNINativeMethod's fields are non-const char*; the strings are literals.
+#define DAW_JNI(name, sig, fn) \
+    {const_cast<char*>(name), const_cast<char*>(sig), reinterpret_cast<void*>(fn)}
 const JNINativeMethod kMethods[] = {
-    {"nativeCreate", "()J", reinterpret_cast<void*>(nativeCreate)},
-    {"nativeDestroy", "(J)V", reinterpret_cast<void*>(nativeDestroy)},
-    {"nativeStart", "(JZI)Z", reinterpret_cast<void*>(nativeStart)},
-    {"nativeStop", "(J)V", reinterpret_cast<void*>(nativeStop)},
-    {"nativePushCommands", "(JLjava/nio/ByteBuffer;I)I",
-     reinterpret_cast<void*>(nativePushCommands)},
-    {"nativePollStatus", "(JLjava/nio/ByteBuffer;)Z",
-     reinterpret_cast<void*>(nativePollStatus)},
-    {"nativeDrainMeters", "(JLjava/nio/ByteBuffer;I)I",
-     reinterpret_cast<void*>(nativeDrainMeters)},
-    {"nativeConsumeParamOverflow", "(J)Z",
-     reinterpret_cast<void*>(nativeConsumeParamOverflow)},
+    DAW_JNI("nativeCreate", "()J", nativeCreate),
+    DAW_JNI("nativeDestroy", "(J)V", nativeDestroy),
+    DAW_JNI("nativeStart", "(JZI)Z", nativeStart),
+    DAW_JNI("nativeStop", "(J)V", nativeStop),
+    DAW_JNI("nativePushCommands", "(JLjava/nio/ByteBuffer;I)I", nativePushCommands),
+    DAW_JNI("nativePollStatus", "(JLjava/nio/ByteBuffer;)Z", nativePollStatus),
+    DAW_JNI("nativeDrainMeters", "(JLjava/nio/ByteBuffer;I)I", nativeDrainMeters),
+    DAW_JNI("nativeConsumeParamOverflow", "(J)Z", nativeConsumeParamOverflow),
 };
+#undef DAW_JNI
 
 } // namespace
 

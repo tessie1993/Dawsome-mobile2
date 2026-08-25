@@ -6,6 +6,51 @@ Newest entry first. Each entry: where the build stands, what comes next.
 
 ---
 
+## 2026-08-25 — AUDIO CORE BRING-UP: the engine is wired, compiled, and ships in the APK
+
+User pivot after installing a silent debug APK: the no-compile phase is
+OVER. The silence was by design (CMake was deliberately unwired from
+Gradle); this entry makes the engine real. THE ENTIRE ENGINE (~200
+classes, written blind across M0-M5) compiled with only two missing
+includes and one const-cast idiom to fix — zero warnings under
+-Wall -Wextra. The reread discipline held.
+
+- app/build.gradle.kts: externalNativeBuild -> cpp/CMakeLists.txt; prefab
+  buildFeature + com.google.oboe:oboe:1.5.1 (version catalog); ndk
+  abiFilters arm64-v8a + x86_64.
+- CMakeLists: ANDROID target = libdawcore.so (links oboe::oboe, android,
+  log, mediandk); host target = dawcore_hostcheck STATIC compiling EVERY
+  TU (-Wall -Wextra) for off-device verification.
+- third_party/dr_libs vendored (dr_wav 0.14.6 / dr_flac / dr_mp3,
+  PD/MIT-0).
+- host_shims/oboe/Oboe.h: API-faithful, behavior-inert mirror of the Oboe
+  1.5 surface the driver uses (real signatures incl. raw-pointer
+  callbacks, chainable builder, ResultWithValue) so OboeDriver compiles
+  host-side; Android uses the real prefab Oboe.
+- Fixes found by the compiler: AudioEngine.cpp missing DeviceRegistry.h
+  include; NativeAudioBridge.cpp missing GraphBuilder.h include +
+  JNINativeMethod const_cast table.
+- Sweep script: third_party/ + host_shims/ excluded (vendored/build
+  support, not app classes).
+- Runtime chain verified by reading: MainActivity -> DawRuntime
+  .ensureStarted -> EngineSync.attach + EngineController.start (opens
+  Oboe when libdawcore loads) + readback; default project has real
+  content on all three tracks. SimpleSampler (type 3) landed and is
+  registered (its M5f3 entry folded in here; StepSequencerCore deferred
+  to M7 with MidiClipPlayer - probability/ratchets need the seeded
+  per-pass machinery).
+- NOT verifiable in this container (no Android SDK): the AGP/NDK build
+  itself. First on-device step: build in Android Studio, install, press
+  PLAY - lead (wavetable), bass (subtractive), drums (rack) should sound.
+  If input permission is absent the driver opens output-only by design.
+- Map: 199 classes; sweep green incl. duplicate checks.
+
+**Next:** user builds on-device; fix whatever the AGP/NDK toolchain or
+first live run surfaces (crashes, silence, xruns). Then resume M5
+(SliceEngine + PreviewPlayer) or address runtime findings first.
+
+---
+
 ## 2026-08-25 — M5 feature 2 done: DrumPadVoice + DrumRackDevice — the drum track sounds
 
 Registered DeviceTypeId 6; the default project's "16-Pad Drum Rack" now
