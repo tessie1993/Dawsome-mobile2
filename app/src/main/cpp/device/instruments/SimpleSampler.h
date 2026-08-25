@@ -221,6 +221,10 @@ public:
         static_cast<int>(sizeof(kSamplerParams) / sizeof(kSamplerParams[0]));
 
     // [builder, pre-install] Model-resolved assignment: pin + distribute.
+    // NOTE: seam-3 adoption memcpys the OLD instance's SamplerShared over
+    // this one at claim time, so after a reassignment shared_.fileId can
+    // trail one adopt behind the buffer actually playing. It is bookkeeping
+    // only - the handle (and the voice pointers it feeds) is the truth.
     void setSample(FileId id, SampleHandle handle) noexcept {
         shared_.fileId = id;
         sample_ = static_cast<SampleHandle&&>(handle);

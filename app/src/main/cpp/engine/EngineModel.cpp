@@ -12,6 +12,8 @@ bool EngineModel::applyDelta(const EntityDelta& d) {
         case EntityKind::Device:      return applyDevice(d.entityId, d.payload, d.byteLen);
         case EntityKind::Scene:       return applyScene(d.entityId, d.payload, d.byteLen);
         case EntityKind::TempoMap:    return applyTempoMap(d.payload, d.byteLen);
+        case EntityKind::SampleRef:   return applySampleRef(d.entityId, d.payload, d.byteLen);
+        case EntityKind::Preview:     return applyPreview(d.entityId, d.payload, d.byteLen);
         case EntityKind::Rack:
         case EntityKind::Routing:
         case EntityKind::LaneGroup:
@@ -143,6 +145,54 @@ bool EngineModel::applyScene(NodeUid id, const uint8_t* p, uint32_t len) {
     if (!readRecord(p, len, 0, w)) return false;
     scenes_[id].index = w.index;
     dirty_ |= kDirtyTimeline;
+    return true;
+}
+
+bool EngineModel::applySampleRef(NodeUid deviceUid, const uint8_t* p, uint32_t len) {
+    if (len == 0) {                              // remove every ref of the device
+        sampleRefs_.erase(deviceUid);
+        dirty_ |= kDirtyGraph;
+        return true;
+    }
+    SampleRefDeltaHead head;
+    if (!readRecord(p, len, 0, head)) return false;
+    const uint32_t pathLen = len - uint32_t(sizeof head);
+    if (pathLen > kMaxSamplePathBytes) return false;
+
+    auto& refs = sampleRefs_[deviceUid];
+    auto it = refs.begin();
+    while (it != refs.end() && it->slot != head.slot) ++it;
+
+    if (head.fileId == 0) {                      // clear one slot
+        if (it != refs.end()) refs.erase(it);
+        if (refs.empty()) sampleRefs_.erase(deviceUid);
+    } else {
+        // Slot count is bounded so a hostile stream cannot balloon the map
+        // (real devices use slot 0 or pads 0..15; refused frames are counted
+        // by the caller like any malformed payload).
+        if (it == refs.end() && refs.size() >= kMaxSampleSlotsPerDevice) return false;
+        ModelSampleRef r;
+        r.slot = head.slot;
+        r.fileId = head.fileId;
+        r.path.assign(reinterpret_cast<const char*>(p) + sizeof head, pathLen);
+        if (it != refs.end()) *it = std::move(r);
+        else refs.push_back(std::move(r));
+    }
+    dirty_ |= kDirtyGraph;                       // builder re-pins at compile
+    return true;
+}
+
+bool EngineModel::applyPreview(uint64_t fileId, const uint8_t* p, uint32_t len) {
+    if (len > kMaxSamplePathBytes) return false;
+    if (fileId == 0 || len == 0) {               // contract: either form stops
+        preview_.fileId = 0;
+        preview_.path.clear();
+    } else {
+        preview_.fileId = fileId;
+        preview_.path.assign(reinterpret_cast<const char*>(p), len);
+    }
+    ++preview_.serial;                           // same file again = retrigger
+    dirty_ |= kDirtyPreview;
     return true;
 }
 

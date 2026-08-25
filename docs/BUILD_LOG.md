@@ -6,6 +6,68 @@ Newest entry first. Each entry: where the build stands, what comes next.
 
 ---
 
+## 2026-08-25 — M5 FINALE built: sample assignment + PreviewPlayer + factory pack (awaiting review cycle 3)
+
+The sample pipeline is closed end to end. OWNER DIRECTIVE ON RECORD: "stop
+next feature" — after this feature passes the gate and its PR goes up, the
+build PAUSES; no further feature begins until the owner says so.
+
+Engine (host check green, zero warnings; map 208 classes, sweep green):
+- StateCodec gate widened through Preview; EngineModel consumes v1.2:
+  ModelSampleRef per-device slot lists (upsert/clear/remove-all, hostile
+  bounds kMaxSamplePathBytes/kMaxSampleSlotsPerDevice, kDirtyGraph) and
+  ModelPreview (fileId 0 = stop; serial bumps every frame so a same-file
+  repeat retriggers; kDirtyPreview).
+- GraphBuilder.pinDeviceSamples: at compile, refs resolve through
+  SampleCache.acquire into the just-created instance - SimpleSampler slot 0
+  setSample, DrumRack pads setPadSample (frozen-type-id downcasts, same
+  justification as the isInstrument cast). buildPreview offers a
+  PreviewClip artifact (empty handle on stop OR decode failure - a failed
+  preview silences the previous one); gcPreview mirrors the timeline GC.
+  acquire's decode blocks the builder thread: fine for one-shots,
+  media-io thread pre-pins from M6 (documented in the map).
+- engine/PreviewPlayer (+PreviewClip): RT audition on the metronome's
+  cue-fold lane (post-graph, never recorded/metered). Click discipline per
+  the browser-preview failure mode research: 5ms fade-in, tail fade INTO
+  the buffer end, replaced preview fades out under the new one with its
+  ack DEFERRED until the fade completes (a third claim hard-drops the
+  near-silent oldest); prepare() releases held claims while streams are
+  closed - the one legal non-RT ack - so rate changes never strand
+  artifacts in the builder GC.
+- SimpleSampler.setSample now documents the adopt nuance: migration can
+  leave shared_.fileId one adopt behind - bookkeeping only, handle is truth.
+
+Kotlin:
+- WireProtocol ENTITY_SAMPLE_REF/PREVIEW; DeltaEncoder sampleRef/preview/
+  previewStop (16B head + UTF-8 path, bit-identical to DeltaSchemas.h).
+- Domain: SampleRef + DeviceModel.sampleRefs (slot-keyed);
+  AssignSampleToDevice (undoable document edit; fileId 0 clears);
+  PreviewSample/StopPreview transient (state-untouched, undo-excluded;
+  dispatch notifies EngineSync unconditionally so they still flow).
+- EngineSync: assignment -> one SampleRef frame; previews -> Preview
+  frames on the same ordered delta path; full pushes emit every device's
+  refs; device/track removals send explicit SampleRef removes (model
+  never cascades).
+- FactoryPack (data.media): 8 factory one-shots SYNTHESIZED
+  deterministically on first run (808 kick w/ exp pitch drop + tanh,
+  two-component snare, 4-burst clap, metal-cluster hats, Karplus pluck
+  C3, saw+sub bass C2, Am stab) - no binaries in repo/APK; tmp+rename
+  install behind a .complete marker; fileId = fnv1a64(library-relative
+  path). DawRuntime.ensureStarted(context) installs on an IO scope.
+- Browser: factory samples merge into SAMPLES_LOOPS; audition button
+  (play/stop toggle, amber active state) rides the preview lane; LOAD on
+  a sample row assigns the selected track's first SAMPLER slot 0 and
+  sends sample.root so playback is in key.
+
+Deferrals (tracked): drum-pad drag assignment + auto mode-flip (drum lab
+pass; engine seam live), tempo-synced loop preview (time-stretch
+milestone), media-io thread pre-pinning (M6), waveform overview render.
+
+Next: reviewer verdict (cycle 3) -> fixes -> commit -> PR #10 -> STOP per
+the owner directive above.
+
+---
+
 ## 2026-08-25 — Review cycle 2 verdict: PASS (UI conformance pass 1 gated through)
 
 Reviewer re-verified every cycle-2 fix in the code at 677ce4a ("every fix

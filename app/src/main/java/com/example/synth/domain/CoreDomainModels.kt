@@ -238,13 +238,27 @@ enum class DeviceType(val displayName: String, val isInstrument: Boolean) {
     LIMITER("Brickwall Limiter", false)
 }
 
+/**
+ * One sample assignment on a device slot. [fileId] is the durable media
+ * identity (fnv1a64 of the library-relative path — WireProtocol discipline);
+ * [path] is the absolute filesystem path the engine loads on a cache miss;
+ * [name] is display-only.
+ */
+data class SampleRef(
+    val fileId: Long,
+    val path: String,
+    val name: String
+)
+
 data class DeviceModel(
     val id: String = UUID.randomUUID().toString(),
     val type: DeviceType,
     val name: String = type.displayName,
     val isEnabled: Boolean = true,
     val isFolded: Boolean = false,
-    val params: Map<String, Float> = emptyMap()
+    val params: Map<String, Float> = emptyMap(),
+    /** Slot → assignment: slot 0 for the sampler, pad index for the drum rack. */
+    val sampleRefs: Map<Int, SampleRef> = emptyMap()
 )
 
 /**
@@ -362,6 +376,16 @@ sealed interface ProjectAction {
     data class RemoveDevice(val trackId: String, val deviceId: String) : ProjectAction
     data class SetDeviceParam(val trackId: String, val deviceId: String, val paramName: String, val value: Float) : ProjectAction
     data class ToggleDeviceEnabled(val trackId: String, val deviceId: String) : ProjectAction
+
+    // Media Actions
+    /** Assign a sample to a device slot (fileId 0 clears it). A document edit — undoable. */
+    data class AssignSampleToDevice(
+        val trackId: String, val deviceId: String, val slot: Int,
+        val fileId: Long, val path: String, val name: String
+    ) : ProjectAction
+    /** Transient browser audition — engine-side only, never a document edit. */
+    data class PreviewSample(val fileId: Long, val path: String) : ProjectAction
+    data object StopPreview : ProjectAction
 
     // Master Actions
     data class SetMasterVolume(val volumeDb: Float) : ProjectAction

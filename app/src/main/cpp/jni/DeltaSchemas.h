@@ -154,6 +154,27 @@ struct SigEventRecord {
 };
 static_assert(sizeof(SigEventRecord) == 16);
 
+// ---- SampleRef (kind = SampleRef, 16-byte head + UTF-8 path) ---------------
+// v1.2: entityId = the DEVICE uid the sample is assigned to. slot 0 for
+// single-sample devices (SimpleSampler); the pad index for DrumRack. The
+// path tail (byteLen - 16 bytes, not NUL-terminated) lets the builder load
+// on a cache miss; fileId is the durable identity (Kotlin fnv1a64). One
+// frame upserts ONE slot; fileId == 0 clears that slot; byteLen == 0
+// removes every ref of the device (the uniform remove convention).
+struct SampleRefDeltaHead {
+    uint32_t slot;
+    uint32_t pad0;
+    uint64_t fileId;
+};
+static_assert(sizeof(SampleRefDeltaHead) == 16);
+
+// ---- Preview (kind = Preview) ----------------------------------------------
+// v1.2: entityId = fileId, payload = the UTF-8 path (no head struct). A
+// fresh frame retriggers the audition from the top; entityId == 0 or
+// byteLen == 0 stops it. Preview is a transient builder fact - it never
+// touches the graph; the builder pins a handle and offers a PreviewClip
+// to the RT PreviewPlayer (post-graph, never recorded, never metered).
+
 // ---- helpers ---------------------------------------------------------------
 
 // Safe unaligned-tolerant read of one record at byte offset; false if the

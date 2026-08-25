@@ -7,7 +7,10 @@
 
 #include "../device/DeviceRegistry.h"
 #include "../device/InstrumentNode.h"
+#include "../device/instruments/DrumRackDevice.h"
+#include "../device/instruments/SimpleSampler.h"
 #include "../engine/AudioEngine.h"
+#include "../media/SampleCache.h"
 
 namespace daw {
 
@@ -83,9 +86,11 @@ void GraphBuilder::threadMain() {
         }
         if (dirty & kDirtyTimeline) buildTimeline();
         if ((dirty & kDirtyGraph) || pendingGraphBuild_) buildGraph();
+        if ((dirty & kDirtyPreview) || pendingPreviewBuild_) buildPreview();
 
         gcTimeline();
         gcGraph();
+        gcPreview();
         gcTempo();
     }
 }
@@ -380,6 +385,10 @@ void GraphBuilder::buildGraph() {
                 inst->setVoiceAdmission(&admitFromLedger, &g->voices);
                 g->voices.registerGroup(inst->voiceGroup());
             }
+            // Model-owned sample assignments: pin cache handles into the NEW
+            // instance now, builder-side (seam-3 residency: handles never
+            // ride the POD migration; RT never touches the cache).
+            pinDeviceSamples(dev.get(), md->type, duid, rate);
             g->nodeIndex.push_back({duid, dev.get(), dhash});
             chain->addDevice(duid, dev.get(), !md->enabled);
             g->nodes.push_back(std::move(dev));
@@ -515,6 +524,73 @@ void GraphBuilder::gcGraph() {
     while (graphArtifacts_.size() > 1 &&
            engine_.graphOffer().retiredAcked(graphArtifacts_.front().graph->epoch)) {
         graphArtifacts_.erase(graphArtifacts_.begin());
+    }
+}
+
+// ---- sample residency + preview ---------------------------------------------
+
+// Resolve the model's SampleRefs for one just-created device and hand it
+// pinned handles. The frozen type ids make the downcasts exact (the registry
+// built the instance from that id - same justification as the isInstrument
+// cast). acquire() decodes ON THIS THREAD on a cache miss: fine for the
+// factory one-shots this milestone ships; long files move to the dedicated
+// media-io thread with the disk-streaming milestone (M6), which will pre-pin
+// before the compile is scheduled.
+void GraphBuilder::pinDeviceSamples(DeviceNode* dev, uint8_t type, NodeUid duid,
+                                    double rate) {
+    const std::vector<ModelSampleRef>* refs = model_.sampleRefsFor(duid);
+    if (refs == nullptr) return;
+    SampleCache& cache = SampleCache::instance();
+    for (const ModelSampleRef& ref : *refs) {
+        if (type == 3) {                                  // SimpleSampler: slot 0
+            if (ref.slot != 0) continue;
+            static_cast<SimpleSampler*>(dev)->setSample(
+                ref.fileId, cache.acquire(ref.fileId, ref.path.c_str(), rate));
+        } else if (type == 6) {                           // DrumRack: slot = pad
+            if (ref.slot >= uint32_t(DrumRackDevice::kPads)) continue;
+            static_cast<DrumRackDevice*>(dev)->setPadSample(
+                int(ref.slot), cache.acquire(ref.fileId, ref.path.c_str(), rate));
+        }
+        // Other types have no sample slots yet; stale refs are inert.
+    }
+}
+
+// One Preview delta = one offered PreviewClip (CONTRACTS v1.2): fileId 0 is
+// the stop artifact (empty handle - claiming it fades the audition out).
+// Decode failures also yield an empty handle: the failed preview SILENCES
+// the previous one rather than leaving it playing under a new selection
+// (and the cache counts the failure for diagnostics).
+void GraphBuilder::buildPreview() {
+    const double rate = engine_.transport().tempoMap().sampleRate();
+    if (rate <= 0.0) {                    // engine not prepared yet; retry later
+        pendingPreviewBuild_ = true;
+        return;
+    }
+    pendingPreviewBuild_ = false;
+
+    const ModelPreview& mp = model_.preview();
+    auto clip = std::make_unique<PreviewClip>();
+    clip->epoch = nextEpoch_++;
+    clip->fileId = mp.fileId;
+    if (mp.fileId != 0) {
+        clip->handle =
+            SampleCache::instance().acquire(mp.fileId, mp.path.c_str(), rate);
+    }
+
+    PreviewClip* replaced = engine_.previewOffer().offer(clip.get());
+    if (replaced != nullptr) {
+        for (auto it = previewArtifacts_.begin(); it != previewArtifacts_.end(); ++it) {
+            if (it->clip.get() == replaced) { previewArtifacts_.erase(it); break; }
+        }
+    }
+    previewArtifacts_.push_back({std::move(clip)});
+    previewBuilds_.fetch_add(1, std::memory_order_relaxed);
+}
+
+void GraphBuilder::gcPreview() {
+    while (previewArtifacts_.size() > 1 &&
+           engine_.previewOffer().retiredAcked(previewArtifacts_.front().clip->epoch)) {
+        previewArtifacts_.erase(previewArtifacts_.begin());
     }
 }
 

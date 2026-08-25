@@ -18,6 +18,7 @@
 #include "../sequencer/TimelineSnapshot.h"
 #include "../sequencer/TransportEngine.h"
 #include "OboeDriver.h"
+#include "PreviewPlayer.h"
 
 // Engine facade and the realtime callback spine (blueprint engine/ module).
 // Owns the driver, the per-producer message channels (CONTRACTS.md seam 2),
@@ -81,6 +82,7 @@ public:
     // Builder -> RT handover slots for compiled artifacts (seams 3/4).
     OfferSlot<TimelineSnapshot>& timelineOffer() noexcept { return timelineOffer_; }
     OfferSlot<PlaybackGraph>&    graphOffer() noexcept { return graphOffer_; }
+    OfferSlot<PreviewClip>&      previewOffer() noexcept { return previewOffer_; }
     // [RT] the currently installed graph (null before the first claim).
     const PlaybackGraph* graph() const noexcept { return graph_; }
     // [RT] the currently installed timeline (null before the first claim).
@@ -128,6 +130,8 @@ private:
     MidiScheduler midiScheduler_;
     SessionPlayer sessionPlayer_;
     MetronomeNode metronome_;
+    OfferSlot<PreviewClip> previewOffer_;
+    PreviewPlayer preview_;
 
     std::unique_ptr<GraphBuilder> builder_;
 

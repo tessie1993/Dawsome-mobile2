@@ -88,6 +88,30 @@ class DeltaEncoder(private val editSeq: Int) {
         frame(WireProtocol.ENTITY_SCENE, uid, p)
     }
 
+    /**
+     * One sample-slot assignment on a device (contracts v1.2 SampleRef):
+     * 16-byte head {u32 slot, u32 pad0, u64 fileId} + the UTF-8 path.
+     * slot 0 for single-sample devices, the pad index for the drum rack;
+     * fileId 0 clears the slot. Remove-all rides [remove] with
+     * [WireProtocol.ENTITY_SAMPLE_REF].
+     */
+    fun sampleRef(deviceUid: Long, slot: Int, fileId: Long, path: String) {
+        val pathBytes = path.toByteArray(Charsets.UTF_8)
+        val p = ByteArray(16 + pathBytes.size)
+        wrap(p).putInt(slot).putInt(0).putLong(fileId).put(pathBytes)
+        frame(WireProtocol.ENTITY_SAMPLE_REF, deviceUid, p)
+    }
+
+    /**
+     * Audition request (contracts v1.2 Preview): entityId carries the
+     * fileId, the payload is the UTF-8 path. A repeat of the same file
+     * retriggers from the top; [previewStop] ends it.
+     */
+    fun preview(fileId: Long, path: String) =
+        frame(WireProtocol.ENTITY_PREVIEW, fileId, path.toByteArray(Charsets.UTF_8))
+
+    fun previewStop() = frame(WireProtocol.ENTITY_PREVIEW, 0L, EMPTY)
+
     /** Canonical project tempo/meter lists (project-global: entityId 0). */
     fun tempoMap(events: List<Pair<Double, Double>>, sigNumerator: Int, sigDenominator: Int) {
         val p = ByteArray(8 + events.size * 16 + 16)

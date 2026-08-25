@@ -108,10 +108,11 @@ public:
                 return r;
             }
 
-            // v1.2 kinds (SampleRef/Preview) stay ABOVE this gate until
-            // EngineModel consumes them - the vocabulary-first staging skips
-            // them as unknown. WIDEN this bound with the implementation.
-            if (kind <= static_cast<uint16_t>(EntityKind::Groove)) {
+            // Known-kind bound = the newest kind EngineModel consumes
+            // (v1.2: through Preview). A kind added to the enum stays above
+            // this gate - skipped + counted - until its model consumer
+            // lands; widen the two together.
+            if (kind <= static_cast<uint16_t>(EntityKind::Preview)) {
                 v.onDelta(EntityDelta{kind, entityId, data + payloadOff, byteLen});
                 ++r.deltasConsumed;
             } else {

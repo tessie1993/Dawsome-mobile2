@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <string>
 #include <unordered_map>
 #include <vector>
 
@@ -73,6 +74,24 @@ struct ModelScene {
     int32_t index = 0;
 };
 
+// One sample assignment on a device (CONTRACTS v1.2 SampleRef): slot 0 for
+// single-sample devices, the pad index for DrumRack. fileId is the durable
+// identity (Kotlin fnv1a64); path lets the builder load on a cache miss.
+struct ModelSampleRef {
+    uint32_t    slot = 0;
+    uint64_t    fileId = 0;      // media FileId
+    std::string path;
+};
+
+// The transient audition request (CONTRACTS v1.2 Preview). fileId == 0 means
+// "stop". serial bumps on EVERY frame so a repeat of the same file still
+// rebuilds the offer - a fresh preview retriggers from the top.
+struct ModelPreview {
+    uint64_t    fileId = 0;
+    std::string path;
+    uint32_t    serial = 0;
+};
+
 struct ModelTempo {
     struct Ev  { double beat; double bpm; };
     struct Sig { double beat; uint16_t num; uint16_t den; };
@@ -80,10 +99,17 @@ struct ModelTempo {
     std::vector<Sig> sigs;
 };
 
+// Payload sanity bounds for the v1.2 sample kinds: a UTF-8 path longer than
+// any real filesystem path, or more slots than any device exposes, is a
+// malformed frame (refused + counted), not data.
+inline constexpr uint32_t kMaxSamplePathBytes     = 4096;
+inline constexpr size_t   kMaxSampleSlotsPerDevice = 64;
+
 // Dirty classes the builder rebuilds from (consumed per build cycle).
 inline constexpr uint32_t kDirtyTimeline = 1u << 0;
 inline constexpr uint32_t kDirtyTempo    = 1u << 1;
-inline constexpr uint32_t kDirtyGraph    = 1u << 2;  // consumer arrives M2
+inline constexpr uint32_t kDirtyGraph    = 1u << 2;
+inline constexpr uint32_t kDirtyPreview  = 1u << 3;  // audition offer rebuild
 
 class EngineModel {
 public:
@@ -106,6 +132,12 @@ public:
     const std::unordered_map<NodeUid, ModelScene>&       scenes()   const noexcept { return scenes_; }
     const ModelTempo& tempo() const noexcept { return tempo_; }
     bool hasTempoDelta() const noexcept { return hasTempoDelta_; }
+    // Sample refs for one device uid, or null when it has none.
+    const std::vector<ModelSampleRef>* sampleRefsFor(NodeUid deviceUid) const noexcept {
+        const auto it = sampleRefs_.find(deviceUid);
+        return it != sampleRefs_.end() ? &it->second : nullptr;
+    }
+    const ModelPreview& preview() const noexcept { return preview_; }
 
     uint32_t lastEditSeq() const noexcept { return lastEditSeq_; }
     void     noteEditSeq(uint32_t seq) noexcept { if (seq > lastEditSeq_) lastEditSeq_ = seq; }
@@ -119,12 +151,16 @@ private:
     bool applyDevice(NodeUid id, const uint8_t* p, uint32_t len);
     bool applyScene(NodeUid id, const uint8_t* p, uint32_t len);
     bool applyTempoMap(const uint8_t* p, uint32_t len);
+    bool applySampleRef(NodeUid deviceUid, const uint8_t* p, uint32_t len);
+    bool applyPreview(uint64_t fileId, const uint8_t* p, uint32_t len);
 
     std::unordered_map<NodeUid, ModelTrack>       tracks_;
     std::unordered_map<NodeUid, ModelClip>        clips_;
     std::unordered_map<NodeUid, ModelClipContent> contents_;
     std::unordered_map<NodeUid, ModelDevice>      devices_;
     std::unordered_map<NodeUid, ModelScene>       scenes_;
+    std::unordered_map<NodeUid, std::vector<ModelSampleRef>> sampleRefs_;
+    ModelPreview preview_;
     ModelTempo tempo_;
     bool       hasTempoDelta_ = false;
 

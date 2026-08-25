@@ -9,6 +9,7 @@
 #include <vector>
 
 #include "../engine/EngineModel.h"
+#include "../engine/PreviewPlayer.h"
 #include "../sequencer/TempoMap.h"
 #include "../sequencer/TimelineSnapshot.h"
 #include "PlaybackGraph.h"
@@ -59,6 +60,7 @@ public:
     uint32_t timelineBuilds() const noexcept { return timelineBuilds_.load(std::memory_order_relaxed); }
     uint32_t tempoBuilds() const noexcept { return tempoBuilds_.load(std::memory_order_relaxed); }
     uint32_t graphBuilds() const noexcept { return graphBuilds_.load(std::memory_order_relaxed); }
+    uint32_t previewBuilds() const noexcept { return previewBuilds_.load(std::memory_order_relaxed); }
     uint32_t danglingRefs() const noexcept { return danglingRefs_.load(std::memory_order_relaxed); }
     uint32_t unregisteredDevices() const noexcept { return unregisteredDevices_.load(std::memory_order_relaxed); }
 
@@ -67,11 +69,14 @@ private:
     void applyBundle(const std::vector<uint8_t>& bundle);
     void buildTimeline();
     void buildGraph();
+    void buildPreview();
+    void pinDeviceSamples(DeviceNode* dev, uint8_t type, NodeUid duid, double rate);
     void rebuildTempoBaseFromModel();
     void consolidateTempoTail(const TempoMap::Snapshot& snap);
     void offerTempoBase(std::unique_ptr<TempoMapBase> built);
     void gcTimeline();
     void gcGraph();
+    void gcPreview();
     void gcTempo();
 
     AudioEngine& engine_;
@@ -87,6 +92,7 @@ private:
     uint64_t nextEpoch_ = 1;
     bool pendingTempoRebuild_ = false;          // waits for a sample rate
     bool pendingGraphBuild_ = false;            // waits for a sample rate
+    bool pendingPreviewBuild_ = false;          // waits for a sample rate
 
     struct TimelineArtifact {
         std::unique_ptr<TimelineSnapshot> snapshot;
@@ -99,15 +105,20 @@ private:
     struct GraphArtifact {
         std::unique_ptr<PlaybackGraph> graph;
     };
+    struct PreviewArtifact {
+        std::unique_ptr<PreviewClip> clip;
+    };
     std::vector<TimelineArtifact> timelineArtifacts_;   // oldest -> newest
     std::vector<TempoArtifact>    tempoArtifacts_;      // oldest -> newest
     std::vector<GraphArtifact>    graphArtifacts_;      // oldest -> newest
+    std::vector<PreviewArtifact>  previewArtifacts_;    // oldest -> newest
 
     std::atomic<uint32_t> applied_{0};
     std::atomic<uint32_t> rejected_{0};
     std::atomic<uint32_t> timelineBuilds_{0};
     std::atomic<uint32_t> tempoBuilds_{0};
     std::atomic<uint32_t> graphBuilds_{0};
+    std::atomic<uint32_t> previewBuilds_{0};
     std::atomic<uint32_t> danglingRefs_{0};   // skipped dangling refs (seam-4 skew)
     std::atomic<uint32_t> unregisteredDevices_{0};   // types whose milestone hasn't landed
 };
