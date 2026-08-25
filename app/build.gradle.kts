@@ -20,6 +20,15 @@ android {
       // engine targets 64-bit NEON-class hardware (blueprint D13).
       abiFilters += listOf("arm64-v8a", "x86_64")
     }
+
+    externalNativeBuild {
+      cmake {
+        // The prefab Oboe package links the SHARED C++ runtime; a static
+        // STL is rejected with CXX1212. AGP packages libc++_shared.so
+        // into the APK automatically when this is set.
+        arguments += "-DANDROID_STL=c++_shared"
+      }
+    }
   }
 
   externalNativeBuild {
