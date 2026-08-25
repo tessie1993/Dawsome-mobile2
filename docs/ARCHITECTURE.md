@@ -926,18 +926,6 @@ classDiagram
         +String projectDataJson
     }
 
-    class DawProjectRepository {
-        +Flow~List~ProjectHeader~~ allProjects
-        +saveProject(state: ProjectState) Long
-        +deleteProject(id: Long)
-    }
-
-    class ProjectSerializer {
-        <<object>>
-        +serialize(state: ProjectState) String
-        +deserialize(json: String) ProjectState
-    }
-
     class AudioRecorderEngine {
         +Boolean isRecording
         +Float inputRmsLevel
@@ -1031,10 +1019,7 @@ classDiagram
     ModMatrixRoute --> ModSource
     ModMatrixRoute --> ModDestination
 
-    DawProjectRepository --> ProjectDao
-    DawProjectRepository ..> ProjectSerializer
     DawDatabase *-- ProjectDao
-    DawProjectRepository ..> ProjectState
 
     AudioRecorderEngine ..> WavWriter
     StemExporter ..> WavWriter
