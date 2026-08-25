@@ -118,4 +118,9 @@ private:
 // called once at engine construction.
 void registerBuiltinDevices();
 
+// Count of registerType() refusals during registerBuiltinDevices() - a
+// nonzero value is a build defect (collision / double registration) worth
+// surfacing even in release.
+int builtinRegistrationFailures();
+
 } // namespace daw

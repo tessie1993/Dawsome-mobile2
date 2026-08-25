@@ -3,12 +3,14 @@
 #include <cmath>
 
 #include "../core/ScopedNoDenormals.h"
+#include "../device/DeviceRegistry.h"
 #include "../graph/GraphBuilder.h"
 
 namespace daw {
 
-// builder_ is the last member: everything it touches (transport, offer
-// slots, rings) is fully constructed before its thread spawns.
+// The GraphBuilder ctor does NOT spawn its thread; start() below runs in
+// the ctor BODY, after every member (whatever its declaration order) is
+// constructed - that ordering, not member position, is the safety invariant.
 AudioEngine::AudioEngine() : builder_(std::make_unique<GraphBuilder>(*this)) {
     registerBuiltinDevices();   // idempotent; before the first graph compile
     builder_->start();

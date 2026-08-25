@@ -2,6 +2,7 @@
 
 #include "instruments/DrumRackDevice.h"
 #include "instruments/FmSynth.h"
+#include "instruments/SimpleSampler.h"
 #include "instruments/SubtractiveSynth.h"
 #include "instruments/WavetableSynth.h"
 
@@ -13,6 +14,8 @@
 namespace daw {
 
 namespace {
+
+int gFailedRegistrations = 0;   // written once, before any reader exists
 
 std::unique_ptr<DeviceNode> makeSubtractiveSynth() {
     return std::make_unique<SubtractiveSynth>();
@@ -30,23 +33,35 @@ std::unique_ptr<DeviceNode> makeDrumRack() {
     return std::make_unique<DrumRackDevice>();
 }
 
+std::unique_ptr<DeviceNode> makeSimpleSampler() {
+    return std::make_unique<SimpleSampler>();
+}
+
 } // namespace
 
 void registerBuiltinDevices() {
     static const bool once = [] {
         DeviceRegistry& r = DeviceRegistry::instance();
-        r.registerType(DeviceTypeId::SubtractiveSynth, "Subtractive Synth",
-                       &makeSubtractiveSynth, kSubtractiveParams,
-                       SubtractiveSynth::kParamCount, /*isInstrument=*/true);
-        r.registerType(DeviceTypeId::WavetableSynth, "Wavetable Lab",
-                       &makeWavetableSynth, kWavetableParams,
-                       WavetableSynth::kParamCount, /*isInstrument=*/true);
-        r.registerType(DeviceTypeId::FmSynth, "FM Four",
-                       &makeFmSynth, kFmParams,
-                       FmSynth::kParamCount, /*isInstrument=*/true);
-        r.registerType(DeviceTypeId::DrumRack, "16-Pad Drum Rack",
-                       &makeDrumRack, kDrumRackParams,
-                       DrumRackDevice::kParamCount, /*isInstrument=*/true);
+        // A false return (re-registration / key-hash collision) is a build
+        // defect; count it so release builds can surface it instead of
+        // silently shipping a missing instrument (review finding).
+        int failed = 0;
+        failed += r.registerType(DeviceTypeId::SubtractiveSynth, "Subtractive Synth",
+                                 &makeSubtractiveSynth, kSubtractiveParams,
+                                 SubtractiveSynth::kParamCount, /*isInstrument=*/true) ? 0 : 1;
+        failed += r.registerType(DeviceTypeId::WavetableSynth, "Wavetable Lab",
+                                 &makeWavetableSynth, kWavetableParams,
+                                 WavetableSynth::kParamCount, /*isInstrument=*/true) ? 0 : 1;
+        failed += r.registerType(DeviceTypeId::FmSynth, "FM Four",
+                                 &makeFmSynth, kFmParams,
+                                 FmSynth::kParamCount, /*isInstrument=*/true) ? 0 : 1;
+        failed += r.registerType(DeviceTypeId::DrumRack, "16-Pad Drum Rack",
+                                 &makeDrumRack, kDrumRackParams,
+                                 DrumRackDevice::kParamCount, /*isInstrument=*/true) ? 0 : 1;
+        failed += r.registerType(DeviceTypeId::Sampler, "Sampler",
+                                 &makeSimpleSampler, kSamplerParams,
+                                 SimpleSampler::kParamCount, /*isInstrument=*/true) ? 0 : 1;
+        gFailedRegistrations = failed;
         // The bank behind WavetableVoice is a lazy static; touch it HERE so
         // the ~4M-sin generation runs at engine construction, never on the
         // audio thread's first render of a wavetable voice.
@@ -56,5 +71,7 @@ void registerBuiltinDevices() {
     }();
     (void)once;
 }
+
+int builtinRegistrationFailures() { return gFailedRegistrations; }
 
 } // namespace daw

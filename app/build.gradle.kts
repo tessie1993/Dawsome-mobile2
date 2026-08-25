@@ -14,6 +14,27 @@ android {
     targetSdk = 36
     versionCode = 1
     versionName = "1.0"
+
+    ndk {
+      // Real devices + emulator. armeabi-v7a deliberately dropped: the
+      // engine targets 64-bit NEON-class hardware (blueprint D13).
+      abiFilters += listOf("arm64-v8a", "x86_64")
+    }
+
+    externalNativeBuild {
+      cmake {
+        // The prefab Oboe package links the SHARED C++ runtime; a static
+        // STL is rejected with CXX1212. AGP packages libc++_shared.so
+        // into the APK automatically when this is set.
+        arguments += "-DANDROID_STL=c++_shared"
+      }
+    }
+  }
+
+  externalNativeBuild {
+    cmake {
+      path = file("src/main/cpp/CMakeLists.txt")
+    }
   }
 
   signingConfigs {
@@ -47,10 +68,14 @@ android {
     sourceCompatibility = JavaVersion.VERSION_11
     targetCompatibility = JavaVersion.VERSION_11
   }
-  buildFeatures { compose = true }
+  buildFeatures {
+    compose = true
+    prefab = true       // Oboe ships as a prefab AAR
+  }
 }
 
 dependencies {
+  implementation(libs.oboe)
   implementation(platform(libs.androidx.compose.bom))
   implementation(libs.androidx.activity.compose)
   implementation(libs.androidx.compose.material.icons.core)

@@ -2,7 +2,7 @@
 
 This document is the **authoritative living map of the codebase**, maintained and kept continuously synchronized with every class, interface, method, and relationship implemented across the architecture (both Native C++ NDK DSP Engine and Kotlin UDF Layer).
 
-**Scope:** this map documents code that exists in the source tree today. The target end-state architecture is specified in [`docs/spec/ARCHITECTURE_BLUEPRINT.md`](spec/ARCHITECTURE_BLUEPRINT.md) (contracts: [`CONTRACTS.md`](spec/CONTRACTS.md); functional specs: [`SPEC_PART1_FUNCTIONAL.md`](spec/SPEC_PART1_FUNCTIONAL.md), [`SPEC_PART2_WORKFLOW.md`](spec/SPEC_PART2_WORKFLOW.md)); classes move into this map when their source lands. The old pre-blueprint C++ skeleton has been fully removed - `app/src/main/cpp/` now contains only new-engine modules (`core/`, `device/`, `dsp/`, `engine/`, `graph/`, `jni/`, `sequencer/`) built to the blueprint, not yet wired into the Gradle build (that happens when the engine is ready to link; blueprint M0).
+**Scope:** this map documents code that exists in the source tree today. The target end-state architecture is specified in [`docs/spec/ARCHITECTURE_BLUEPRINT.md`](spec/ARCHITECTURE_BLUEPRINT.md) (contracts: [`CONTRACTS.md`](spec/CONTRACTS.md); functional specs: [`SPEC_PART1_FUNCTIONAL.md`](spec/SPEC_PART1_FUNCTIONAL.md), [`SPEC_PART2_WORKFLOW.md`](spec/SPEC_PART2_WORKFLOW.md)); classes move into this map when their source lands. The old pre-blueprint C++ skeleton has been fully removed - `app/src/main/cpp/` contains only new-engine modules (`core/`, `device/`, `dsp/`, `engine/`, `graph/`, `jni/`, `media/`, `sequencer/`) built to the blueprint. **The engine is WIRED and COMPILING**: `app/build.gradle.kts` builds `libdawcore.so` via `externalNativeBuild` + prefab Oboe, and the full engine also compiles off-device as `dawcore_hostcheck` (host_shims/ Oboe + JDK jni.h; zero warnings under -Wall -Wextra). `third_party/` (vendored dr_libs) and `host_shims/` are build support, not app classes, and are excluded from this map.
 
 ```mermaid
 classDiagram
@@ -405,11 +405,12 @@ classDiagram
         +primed() bool
     }
     class OboeDriver {
-        <<output-driven full duplex per D2: output stream w/ callback (LowLatency, Exclusive->Shared, native rate), callback-less input matched+2x capacity, non-blocking drain, sub-chunks bursts to kMaxBlock, latency reports, reopen flag on route change>>
+        <<output-driven full duplex per D2: output stream w/ callback (LowLatency, Exclusive->Shared, native rate), callback-less input matched+2x capacity + STEREO-VALIDATED (non-stereo capture rejected, session stays output-only), non-blocking drain, sub-chunks bursts to kMaxBlock, reopen flag on route change. Teardown closes the OUTPUT first (its close joins the callback, quiescing drainInput before the input dies - Oboe FullDuplex order); latency/xruns sampled by refreshTelemetry() on the NON-RT readback poll, never inside onAudioReady (framework-lock priority inversion)>>
         +open(sink: RenderSink, cfg: Config) bool
         +start() bool
         +stop()
         +close()
+        +refreshTelemetry()
         +sampleRate() double
         +outputLatencyMs() double
         +inputLatencyMs() double
@@ -794,7 +795,7 @@ classDiagram
         +vector~float~ planar
     }
     class AudioFileDecoder {
-        <<[non-RT] whole-file decode to float PCM: format sniffed from content magic (RIFF/WAVE, fLaC, ID3/MPEG sync, ftyp), never the extension; WAV/FLAC/MP3 via vendored dr_libs (PD/MIT-0, single implementation TU = AudioFileDecoder.cpp, headers land with the first compile milestone), AAC/M4A via NdkMediaExtractor+Codec (Android-only; host builds report unsupported). Channels capped at first two; planar output matches SampleBuffer>>
+        <<[non-RT] whole-file decode to float PCM: format sniffed from content magic (RIFF/WAVE, fLaC, ID3/MPEG sync, ftyp), never the extension; WAV (incl. RF64)/FLAC/MP3 via vendored dr_libs at third_party/dr_libs (PD/MIT-0, single implementation TU = AudioFileDecoder.cpp), AAC/M4A via NdkMediaExtractor+Codec (Android-only; host builds report unsupported). Channels capped at first two; planar output matches SampleBuffer>>
         +decodeFile(path)$ DecodeResult
     }
 
@@ -849,12 +850,35 @@ classDiagram
     DrumPadVoice ..> SampleHandle
     DrumPadVoice ..> NoiseGen
     DrumPadVoice ..> SvfFilter
+    class SamplerShared {
+        <<POD settings/migrating state body: fileId (bookkeeping mirror of the model - the HANDLE never rides POD migration), root/tune/fine, start + loop mode/points (normalized 0..1), filter cutoff/res/envOct/keytrack, amp+filter ADSR, velocity depths, quality>>
+    }
+    class SamplerVoice {
+        <<pitched STEREO sample voice: linear-interp read of a builder-distributed const SampleBuffer* (cache conforms to device rate per D5, so ratio = 2^((note-root+tune)/12) is purely musical); per-channel SVF lowpass pair (stateful filters never shared across channels) + amp ADSR; forward loop with window clamped to the READABLE range [0, frames-1] (the interpolator taps i0+1 - review-hardened against the loop-end overread; degenerate < 32 frames disables) and SEAM-AWARE interpolation (the tap after loopEnd is the sample at loopStart - no per-pass click); control-rate 16 filter; standard VoiceT steal contract>>
+        +prepare / setBuffer(b) / start / renderAdd
+        +active() / releasing() / level() / inTransientWindow()
+        +beginRelease() / fastRelease() / kill()
+    }
+    class SimpleSampler {
+        <<DeviceTypeId 3 "Sampler" - melodic one-sample player on PolyInstrument (pool 16, poly 8); zones/layers/SFZ are MultiSampler's milestone. Sample residency protocol: the MODEL owns the fileId; the GraphBuilder resolves it and calls setSample() with a cache-pinned handle at COMPILE time per node instance (handles are refcounted members, never memcpy'd; RT never touches the cache). Silent-but-parameterized until the media-library wire lands. 22 contract descriptors (kSamplerParams)>>
+        +setSample(id: FileId, handle: SampleHandle)
+        +paramCount() / paramDescriptor(i)
+        +setParamImmediate(dense, plain)
+    }
+
     InstrumentNode <|-- DrumRackDevice
     VoiceGroup <|-- DrumRackDevice
     DrumRackDevice *-- DrumPadVoice
     DrumRackDevice *-- DrumRackShared
     DrumRackShared *-- DrumPadShared
     DrumRackDevice ..> DrumKitDefault
+    PolyInstrument~VoiceT_SharedT_StateVersion_PoolVoices_DefaultPolyphony~ <|-- SimpleSampler
+    SimpleSampler *-- SamplerVoice
+    SimpleSampler *-- SamplerShared
+    SimpleSampler ..> SampleHandle
+    SamplerVoice ..> SampleBuffer
+    SamplerVoice ..> SvfFilter
+    SamplerVoice ..> AdsrEnvelope
 
     %% ---- M2 graph/ (strips + meters) ----
     class TrackStrip {

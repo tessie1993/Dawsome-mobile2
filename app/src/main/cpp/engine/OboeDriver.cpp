@@ -50,11 +50,18 @@ bool OboeDriver::open(RenderSink& sink, const Config& cfg) noexcept {
         if (in.openStream(inputStream_) != oboe::Result::OK) {
             inputStream_.reset();                     // output-only is still a session
         }
+        // The ring de-interleaves with a stereo stride; a device that only
+        // opens mono/multichannel capture would garble every frame (review
+        // finding). Reject and stay output-only until channel adaptation
+        // lands with the recording milestone.
+        if (inputStream_ && inputStream_->getChannelCount() != 2) {
+            inputStream_->close();
+            inputStream_.reset();
+        }
         inputOpen_.store(inputStream_ != nullptr, std::memory_order_release);
     }
 
     inputRing_.prepare(framesPerBurst_ * 4, kMaxChannels, framesPerBurst_ * 2);
-    latencyRefreshCountdown_ = 0;
     needsReopen_.store(false, std::memory_order_release);
     return true;
 }
@@ -73,8 +80,12 @@ void OboeDriver::stop() noexcept {
 void OboeDriver::close() noexcept {
     stop();
     inputOpen_.store(false, std::memory_order_release);
-    if (inputStream_) { inputStream_->close(); inputStream_.reset(); }
+    // OUTPUT first: its close() joins the data callback, so no onAudioReady
+    // (and therefore no drainInput touching inputStream_) can run once it
+    // returns - closing the input first would race the callback's reads
+    // (review finding; matches Oboe's FullDuplex teardown order).
     if (outputStream_) { outputStream_->close(); outputStream_.reset(); }
+    if (inputStream_) { inputStream_->close(); inputStream_.reset(); }
     sink_ = nullptr;
 }
 
@@ -133,20 +144,18 @@ oboe::DataCallbackResult OboeDriver::onAudioReady(oboe::AudioStream* stream,
         done += n;
     }
 
-    // Cheap periodic bookkeeping (no syscalls beyond oboe's own accessors).
-    if (--latencyRefreshCountdown_ <= 0) {
-        latencyRefreshCountdown_ = 256;               // ~1 s at 192-frame bursts
-        refreshLatency();
-        const auto x = stream->getXRunCount();
-        if (x) xruns_.store(x.value(), std::memory_order_relaxed);
-    }
     return oboe::DataCallbackResult::Continue;
 }
 
-void OboeDriver::refreshLatency() noexcept {
+// Latency/xruns are sampled here - the non-RT readback poll - never inside
+// onAudioReady: calculateLatencyMillis can take framework locks on the
+// legacy audio path (priority inversion in the callback).
+void OboeDriver::refreshTelemetry() noexcept {
     if (outputStream_) {
         const auto l = outputStream_->calculateLatencyMillis();
         if (l) outputLatencyMs_.store(l.value(), std::memory_order_relaxed);
+        const auto x = outputStream_->getXRunCount();
+        if (x) xruns_.store(x.value(), std::memory_order_relaxed);
     }
     if (inputStream_) {
         const auto l = inputStream_->calculateLatencyMillis();

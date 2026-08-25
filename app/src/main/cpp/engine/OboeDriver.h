@@ -64,6 +64,13 @@ public:
     void stop() noexcept;
     void close() noexcept;
 
+    // [non-RT, readback path] Sample latency/xrun figures OUTSIDE the audio
+    // callback: calculateLatencyMillis can take framework locks on the
+    // legacy path - a priority-inversion risk inside onAudioReady (review
+    // finding). The poll thread is serialized with open/close by the
+    // engine-io dispatcher, so touching the streams here is safe.
+    void refreshTelemetry() noexcept;
+
     // Stream facts for EnginePrefs / RecordingAligner.
     double sampleRate() const noexcept { return sampleRate_; }
     int    framesPerBurst() const noexcept { return framesPerBurst_; }
@@ -88,7 +95,6 @@ public:
 
 private:
     void drainInput(int32_t numFrames) noexcept;
-    void refreshLatency() noexcept;
 
     std::shared_ptr<oboe::AudioStream> outputStream_;
     std::shared_ptr<oboe::AudioStream> inputStream_;
@@ -108,7 +114,6 @@ private:
     std::atomic<int32_t> xruns_{0};
     std::atomic<bool>    needsReopen_{false};
     std::atomic<bool>    inputOpen_{false};
-    int latencyRefreshCountdown_ = 0;
 };
 
 } // namespace daw
