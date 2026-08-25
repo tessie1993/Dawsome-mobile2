@@ -6,6 +6,124 @@ Newest entry first. Each entry: where the build stands, what comes next.
 
 ---
 
+## 2026-08-25 — Review cycle 2 verdict: PASS (UI conformance pass 1 gated through)
+
+Reviewer re-verified every cycle-2 fix in the code at 677ce4a ("every fix
+verified in the code, not the fix map") and passed the slice. One
+non-blocking nit remained: timecodeFormatted in TransportStateHolder was
+consumer-less (bars.beats replaced it in the transport readout) and still
+default-locale formatted. Resolution: DROPPED the field rather than pin
+Locale.ROOT - its min:sec:ms math derived wall time from playheadBeat/bpm,
+which is wrong the moment tempo maps land; when a timecode view actually
+arrives it must read the engine's sample-position readback. Removing it
+deletes a latent bug instead of preserving one.
+
+Feature complete behind the gate: Earth V2 conformance pass 1 (fonts,
+token corrections, transport bar, nav dock, metronome vertical) +
+contracts v1.2.0 vocabulary slice. PR goes up for merge; on "merged,
+continue" the branch restarts from main and M5 finale (task #29) resumes
+at the widen-the-StateCodec-gate step (DeviceSampleRefPayload schema
+first, then EngineModel/GraphBuilder consumption).
+
+---
+
+## 2026-08-25 — Review cycle 2: FAIL -> all findings fixed (resubmitted)
+
+The gate earned its keep: the reviewer caught a REAL COMPILE BREAKER
+before CI did — Font(resId, weight, variationSettings) is
+@ExperimentalTextApi and the repo had no opt-in, so commit 8941479's
+Kotlin build was red on arrival. Fixes, finding by finding:
+
+- [BLOCKER] @OptIn(ExperimentalTextApi::class) on EarthFonts.variable()
+  with the rationale in a comment. Lesson: experimental-API opt-ins are
+  part of "compiles by inspection" - check RequiresOptIn on every new
+  androidx API surface.
+- [MINOR] bars.beats math is now denominator-aware (bar = num * 4/den
+  quarters, matching the engine's barBeats() rule; beats counted in the
+  denominator's unit) - 6/8 reads correctly.
+- [MINOR] OFL compliance: assets/fonts/ carries the three OFL.txt texts
+  (they SHIP in the APK, satisfying accompany-distribution) + VENDOR.md
+  provenance manifest per the dr_libs precedent.
+- [MINOR] Zero inline sp overrides remain: EarthTypography gained
+  displayTimeCompact + microLabel; nav label and time-sig use existing
+  tokens as-is. Sizes live in the token file only.
+- [NIT] StateCodec: gate comment ("widen with the implementation") +
+  phantom DeviceSampleRefPayload reference corrected.
+- [NIT] ToggleMetronome excluded from the undo stack (transport toggle,
+  not a document edit); Undo/Redo icons -> AutoMirrored variants;
+  Locale.ROOT pinned on all numeric readout formatting.
+- [NIT deferrals tracked]: record/metronome pulse-flash, BPM touch-scrub
+  (milestone-commented), 6-item dock consolidation, play-glyph
+  black-vs-white errata (KEEPING the render's black-on-amber - higher
+  contrast; COMPONENTS.md §2.1 white noted as pack errata).
+
+Host check green; map 200 classes + the two new type styles; sweep green
+incl. duplicates. Resubmitted to the reviewer for the cycle-2 verdict.
+
+---
+
+## 2026-08-25 — Earth V2 UI conformance pass 1 (user-flagged; portrait core)
+
+User called out that the UI does not look like the Earth.Design V2 pack.
+Audit verdict: token VALUES were genuinely the pack's (palette/glass tiers
+match TOKENS.json) but the pack's FONTS were never bundled, one glass tier
+misused the active rim, and the screens/components were never built from
+the pack's 14 reference renders in docs/spec/Earth.Design/assets/. Fixes:
+
+- Fonts: Outfit + Inter + JetBrains Mono vendored as variable TTFs
+  (res/font) with weight instancing (EarthFonts); every EarthTypography
+  style now resolves through them - zero system-default families.
+- Token corrections: GlassBorderHighlight to the spec's 8% white;
+  Level1Dock border to "subtle" per TOKENS.json (amber rim = levels 3/4).
+- EarthTransportBar rebuilt to the portrait reference + COMPONENTS.md §2:
+  floating rounded Level1 card (was a flush square strip), 36dp/6dp
+  buttons (were 32dp/4dp), record = #DC2626 per spec (crimson maple is
+  the ARM color), metronome toggle added, dark inset readout panel with
+  stacked BPM label/value, bars.beats.sixteenths timecode + project name.
+- Metronome went in as a FULL vertical: ProjectState.isMetronomeOn +
+  ToggleMetronome action/reducer + EngineSync branch -> encoder op ->
+  the engine's MetronomeNode (the engine side existed since M4; the
+  Kotlin layer never exposed it).
+- EarthNavigationDock rebuilt: floating rounded card, icon-over-label
+  items, active = amber-tinted glass chip (tokens' Primary/Active role).
+  Tab consolidation to the reference's SESSION/ARRANGE/MIX/EDIT/DEVICES/
+  MORE six-set is a UX decision deferred with a note.
+- Deferred to pass 2 (screen milestones): knob halo/mod-ring detailing,
+  clip-tile launch states, per-screen recomposition against the remaining
+  reference renders (arranger/browser/mastering/synth/sampler sheets).
+- Map 200 classes (+EarthFonts), sweep green incl. duplicates. Kotlin
+  compile verified by CI (no host Kotlin toolchain).
+
+Review gate cycle 2 covers this batch + the v1.2.0 contracts slice; M5
+finale (#29) stays paused mid-slice and resumes after.
+
+---
+
+## 2026-08-25 — Review gate cycle 1 CLOSED: PASS. PR #8 merged; specs re-confirmed
+
+The reviewer re-verified every cycle-1 fix in code (including
+cross-checking EngineController/EngineReadback threading to confirm the
+telemetry relocation is race-free) and returned VERDICT: PASS with one
+non-blocking NIT (upstream commit SHA in dr_libs VENDOR.md - TODO noted
+in the manifest; the fetch env has no GitHub API access). CI went green
+in the same window (run #25 first full NDK build, #26 on the fixes, #27
+post-merge on main) and the user MERGED PR #8 - the engine is compiled,
+reviewed, and on main.
+
+Also this entry: the user re-uploaded both spec blueprints - verified
+BYTE-IDENTICAL to docs/spec/SPEC_PART1_FUNCTIONAL.md and
+SPEC_PART2_WORKFLOW.md (already vendored since Phase A; no change).
+WORKFLOW.md gains step 0: consult the specs before every feature (they
+are the read-only product authority; spec wins over blueprint on
+conflict), and the review gate's judging authorities now name them.
+
+**Next: M5 finale** — the sample-assignment wire + PreviewPlayer
+audition (spec 2.3/12: preview sounds, load samples into sampler/pads),
+so SimpleSampler and DrumPad Sample mode can actually load audio now
+that the engine runs on device. Review gate cycle 2 covers it.
+
+---
+
 ## 2026-08-25 — Review gate cycle 1: FAIL -> all findings fixed (resubmitted)
 
 First run of the new HARD review rule (AAA DSP+Android reviewer agent,

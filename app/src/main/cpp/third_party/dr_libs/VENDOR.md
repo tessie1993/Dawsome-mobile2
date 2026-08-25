@@ -16,5 +16,8 @@ so upstream fixes/CVEs can be diffed).
 - Local modifications: NONE. Update procedure: re-download all three
   headers from upstream master in one change, update this manifest's date
   and versions, re-run the host check.
+- TODO (review NIT): record the upstream commit SHA here on the next
+  vendoring touch (the fetch env had no GitHub API access to resolve it) -
+  date+versions alone are not exactly diffable.
 - Consumed by: `media/AudioFileDecoder.cpp` (the single
   `DR_*_IMPLEMENTATION` translation unit).

@@ -15,7 +15,7 @@ object EarthColorTokens {
 
     // Glass Borders & Rim Highlights
     val GlassBorderSubtle = Color(0x333D352B)
-    val GlassBorderHighlight = Color(0x1FFFFFFF)
+    val GlassBorderHighlight = Color(0x14FFFFFF)   // 8% white per TOKENS.json
     val GlassBorderRimAmber = Color(0x66FF7600)
 
     // Autumn Hues (Warm Harmonizers, Percussion, Leads & Dynamics)

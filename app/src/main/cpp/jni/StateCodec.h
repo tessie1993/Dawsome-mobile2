@@ -48,6 +48,8 @@ enum class EntityKind : uint16_t {
     TempoMap    = 7,
     LaneGroup   = 8,
     Groove      = 9,
+    SampleRef   = 10,   // v1.2: entityId = device uid; payload per CONTRACTS v1.2
+    Preview     = 11,   // v1.2: entityId = fileId; payload = UTF-8 path
 };
 
 struct EntityDelta {
@@ -106,6 +108,9 @@ public:
                 return r;
             }
 
+            // v1.2 kinds (SampleRef/Preview) stay ABOVE this gate until
+            // EngineModel consumes them - the vocabulary-first staging skips
+            // them as unknown. WIDEN this bound with the implementation.
             if (kind <= static_cast<uint16_t>(EntityKind::Groove)) {
                 v.onDelta(EntityDelta{kind, entityId, data + payloadOff, byteLen});
                 ++r.deltasConsumed;

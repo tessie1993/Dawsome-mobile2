@@ -29,8 +29,10 @@ object EarthGlassTokens {
     val Level1Dock = GlassElevation(
         blurRadius = 12.dp,
         bgOpacity = 0.80f,
+        // TOKENS.json level1 border = "subtle" - the amber rim belongs to
+        // levels 3/4 (rimActive), not the dock tier.
         borderBrush = Brush.verticalGradient(
-            colors = listOf(Color(0x33FF7600), Color(0x0A3D352B))
+            colors = listOf(Color(0x333D352B), Color(0x0A3D352B))
         ),
         shadowElevation = 4.dp
     )

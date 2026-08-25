@@ -79,6 +79,7 @@ class ProjectStore(
             is ProjectAction.TogglePlay -> current.copy(isPlaying = !current.isPlaying)
             is ProjectAction.ToggleRecord -> current.copy(isRecording = !current.isRecording)
             is ProjectAction.ToggleLoop -> current.copy(isLooping = !current.isLooping)
+            is ProjectAction.ToggleMetronome -> current.copy(isMetronomeOn = !current.isMetronomeOn)
             is ProjectAction.SetBpm -> current.copy(bpm = action.bpm.coerceIn(20f, 300f))
             is ProjectAction.SeekToBeat -> current.copy(playheadBeat = action.beat.coerceAtLeast(0f))
             is ProjectAction.SetLoopRegion -> current.copy(
@@ -325,6 +326,7 @@ class ProjectStore(
     private fun isStateChangeUndoable(action: ProjectAction): Boolean {
         return when (action) {
             is ProjectAction.Play, is ProjectAction.Stop, is ProjectAction.TogglePlay,
+            is ProjectAction.ToggleMetronome,   // transport toggle, not a document edit
             is ProjectAction.SeekToBeat, is ProjectAction.SelectTab, is ProjectAction.SelectTrack -> false
             else -> true
         }
