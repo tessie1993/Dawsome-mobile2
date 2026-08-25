@@ -82,6 +82,11 @@ class CommandEncoder(
         WireProtocol.FAMILY_TRANSPORT, WireProtocol.TRANSPORT_SET_TIME_SIG,
         a = (numerator shl 16) or (denominator and 0xFFFF)))
 
+    /** 0 = internal, 1 = Ableton Link, 2 = MIDI clock slave. */
+    fun setTimebaseSource(source: Int) = enqueue(message(
+        WireProtocol.FAMILY_TRANSPORT, WireProtocol.TRANSPORT_SET_TIMEBASE_SOURCE,
+        a = source))
+
     // ---- params (addressed (nodeUid, paramKeyHash) - seam 2 rule) ----------
 
     fun paramMove(nodeUid: Long, paramKeyHash: Int, plain: Double, editSeq: Int) =

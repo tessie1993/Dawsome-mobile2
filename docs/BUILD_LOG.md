@@ -6,6 +6,32 @@ Newest entry first. Each entry: where the build stands, what comes next.
 
 ---
 
+## 2026-08-25 — M1 feature 1 done: TempoMap + TransportEngine
+
+`cpp/sequencer/` begins. TempoMap implements the frozen contract: immutable
+builder-compiled base (piecewise-linear segments — ramps densify at compile
+time, the RT path is lookup + lerp) swapped via OfferSlot epochs, plus the
+fixed-cap RT tail (anchored live tempo splices, seqlock-published,
+rev-stamped; claim retains events newer than foldRev; governing rule =
+newest tail event at-or-before position, which also handles seek-back tempo
+sets whose anchors are non-monotonic). Background snapshots take a mutex the
+RT thread never touches. TransportEngine owns play/pause/stop-to-zero,
+seeks, beat-anchored loop region (sample anchors recomputed on tempo
+events/base claims), time-sig + metronome flags, the TimebaseSource seam
+(external authority rejects tempo messages + counts), and advance() which
+claims offered bases then splits the block at a loop wrap (1-2 spans).
+AudioEngine now routes ALL 16 transport ops, advances real transport, and
+publishes a real beat clock; same-rate reopens keep transport state. Status
+wire claims its reserved word as timeSigPacked; metronome bit added
+(kClockMetronome == kStatusMetronome), mirrored through WireProtocol /
+EngineReadback / CommandEncoder (setTimebaseSource added). Map: 109 classes,
+sweep green.
+
+**Next: M1 feature 2** — EngineModel + TimelineSnapshot units + GraphBuilder
+thread skeleton (StateCodec delta application, snapshot compile + OfferSlot
+swap, epoch GC, tempo-tail consolidation nudge). Then f3 MidiScheduler,
+f4 Kotlin model v2 + delta sync.
+
 ## 2026-08-25 (later still) — M0 COMPLETE (feature 4: the JNI seam)
 
 Engine foundation milestone done. Feature 4 delivered the full Kotlin <-> C++

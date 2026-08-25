@@ -22,11 +22,14 @@ data class EngineStatus(
     val playing: Boolean = false,
     val recording: Boolean = false,
     val looping: Boolean = false,
+    val metronome: Boolean = false,
     val needsReopen: Boolean = false,
     val inputOpen: Boolean = false,
     val samplePos: Long = 0,
     val beat: Double = 0.0,
     val bpm: Double = 120.0,
+    val timeSigNumerator: Int = 4,
+    val timeSigDenominator: Int = 4,
     val sampleRate: Double = 0.0,
     val outputLatencyMs: Float = 0f,
     val inputLatencyMs: Float = 0f,
@@ -141,16 +144,20 @@ class EngineReadback(private val controller: EngineController) {
 
     private fun decodeStatus(nowNanos: Long): EngineStatus {
         val flags = statusBuffer.getInt(4)
+        val sig = statusBuffer.getInt(76)
         return EngineStatus(
             running = flags and WireProtocol.STATUS_RUNNING != 0,
             playing = flags and WireProtocol.STATUS_PLAYING != 0,
             recording = flags and WireProtocol.STATUS_RECORDING != 0,
             looping = flags and WireProtocol.STATUS_LOOPING != 0,
+            metronome = flags and WireProtocol.STATUS_METRONOME != 0,
             needsReopen = flags and WireProtocol.STATUS_NEEDS_REOPEN != 0,
             inputOpen = flags and WireProtocol.STATUS_INPUT_OPEN != 0,
             samplePos = statusBuffer.getLong(8),
             beat = statusBuffer.getDouble(16),
             bpm = statusBuffer.getDouble(24),
+            timeSigNumerator = (sig ushr 16) and 0xFFFF,
+            timeSigDenominator = sig and 0xFFFF,
             anchorFrame = statusBuffer.getLong(32),
             anchorNanos = statusBuffer.getLong(40),
             sampleRate = statusBuffer.getDouble(48),

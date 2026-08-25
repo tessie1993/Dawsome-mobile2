@@ -87,11 +87,12 @@ object WireProtocol {
     // Status: version u32@0, flags u32@4, samplePos i64@8, beat f64@16,
     // bpm f64@24, anchorFrame i64@32, anchorNanos i64@40, sampleRate f64@48,
     // outputLatencyMs f32@56, inputLatencyMs f32@60, xruns u32@64,
-    // droppedNotes u32@68, panics u32@72, reserved u32@76.
+    // droppedNotes u32@68, panics u32@72, timeSigPacked u32@76 (num<<16|den).
     const val STATUS_BYTES = 80
     const val STATUS_PLAYING = 1 shl 0
     const val STATUS_RECORDING = 1 shl 1
     const val STATUS_LOOPING = 1 shl 2
+    const val STATUS_METRONOME = 1 shl 3
     const val STATUS_RUNNING = 1 shl 8
     const val STATUS_NEEDS_REOPEN = 1 shl 9
     const val STATUS_INPUT_OPEN = 1 shl 10

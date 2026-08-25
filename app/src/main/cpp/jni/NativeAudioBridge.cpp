@@ -41,6 +41,7 @@ using namespace daw;
 static_assert(kStatusPlaying == kClockPlaying);
 static_assert(kStatusRecording == kClockRecording);
 static_assert(kStatusLooping == kClockLooping);
+static_assert(kStatusMetronome == kClockMetronome);
 
 // Error returns shared with Kotlin (WireProtocol.RESULT_*). Codec failures
 // map to -Status; bridge-level failures start at -100.
@@ -196,6 +197,9 @@ jboolean nativePollStatus(JNIEnv* env, jobject, jlong handle, jobject buffer) {
     w.xruns = static_cast<uint32_t>(drv.xrunCount());
     w.droppedNotes = static_cast<uint32_t>(b->engine.droppedNotes());
     w.panics = static_cast<uint32_t>(b->engine.panics());
+    w.timeSigPacked =
+        (uint32_t(b->engine.transport().timeSigNumerator()) << 16) |
+        uint32_t(b->engine.transport().timeSigDenominator());
 
     std::memcpy(dst, &w, sizeof w);
     return JNI_TRUE;

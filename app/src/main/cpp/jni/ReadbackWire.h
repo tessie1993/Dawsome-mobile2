@@ -31,6 +31,7 @@ namespace daw {
 inline constexpr uint32_t kStatusPlaying     = 1u << 0;
 inline constexpr uint32_t kStatusRecording   = 1u << 1;
 inline constexpr uint32_t kStatusLooping     = 1u << 2;
+inline constexpr uint32_t kStatusMetronome   = 1u << 3;
 inline constexpr uint32_t kStatusRunning     = 1u << 8;   // streams started
 inline constexpr uint32_t kStatusNeedsReopen = 1u << 9;   // route/device change (D5)
 inline constexpr uint32_t kStatusInputOpen   = 1u << 10;  // duplex input stream live
@@ -49,7 +50,7 @@ struct EngineStatusWire {
     uint32_t xruns;            // offset 64
     uint32_t droppedNotes;     // offset 68  (wrapping 32-bit view of the counter)
     uint32_t panics;           // offset 72
-    uint32_t reserved;         // offset 76  = 0 until claimed
+    uint32_t timeSigPacked;    // offset 76  (numerator << 16) | denominator
 };
 
 static_assert(sizeof(EngineStatusWire) == 80, "poll layout is frozen at 80 bytes");
@@ -59,7 +60,7 @@ static_assert(offsetof(EngineStatusWire, anchorFrame) == 32);
 static_assert(offsetof(EngineStatusWire, sampleRate) == 48);
 static_assert(offsetof(EngineStatusWire, outputLatencyMs) == 56);
 static_assert(offsetof(EngineStatusWire, xruns) == 64);
-static_assert(offsetof(EngineStatusWire, reserved) == 76);
+static_assert(offsetof(EngineStatusWire, timeSigPacked) == 76);
 static_assert(std::is_trivially_copyable_v<EngineStatusWire>);
 
 inline constexpr size_t kStatusWireBytes = sizeof(EngineStatusWire);

@@ -1,11 +1,19 @@
 #include "AudioEngine.h"
 
+#include <cmath>
+
 #include "../core/ScopedNoDenormals.h"
 
 namespace daw {
 
 bool AudioEngine::start(const OboeDriver::Config& cfg) noexcept {
     if (!driver_.open(*this, cfg)) return false;
+    // Prepare only on an actual rate change: a same-rate reopen (D5 route
+    // recovery) keeps position and the live tempo tail. A rate change resets
+    // the map (its sample anchors are rate-bound); the full re-prepare
+    // sequence (cache re-keys, re-prime) arrives with the media system.
+    if (driver_.sampleRate() != transport_.tempoMap().sampleRate())
+        transport_.prepare(driver_.sampleRate());
     return driver_.start();
 }
 
@@ -16,19 +24,27 @@ void AudioEngine::stop() noexcept {
 
 void AudioEngine::applyTransport(const EngineMessage& m) noexcept {
     switch (static_cast<TransportOp>(m.op)) {
-        case TransportOp::Play:        playing_ = true; break;
-        case TransportOp::Stop:        playing_ = false; samplePos_ = 0; break;
-        case TransportOp::TogglePlay:  playing_ = !playing_; break;
-        case TransportOp::RecordOn:    recording_ = true; break;
-        case TransportOp::RecordOff:   recording_ = false; break;
-        case TransportOp::SeekSample:  if (m.samplePos >= 0) samplePos_ = m.samplePos; break;
-        case TransportOp::SetTempo:    if (m.v0 > 0.0) bpm_ = m.v0; break;
-        case TransportOp::NudgeTempo:  bpm_ += m.v0; break;
-        case TransportOp::LoopOn:      looping_ = true; break;
-        case TransportOp::LoopOff:     looping_ = false; break;
-        default:
-            // SeekBeat/SetLoopRegion/SetTimeSig/metronome/timebase need the
-            // TempoMap and TransportEngine (M1); ignored by the skeleton.
+        case TransportOp::Play:        transport_.play(); break;
+        case TransportOp::Stop:        transport_.stop(); break;
+        case TransportOp::TogglePlay:  transport_.togglePlay(); break;
+        case TransportOp::RecordOn:    transport_.setRecording(true); break;
+        case TransportOp::RecordOff:   transport_.setRecording(false); break;
+        case TransportOp::SeekSample:  if (m.samplePos >= 0) transport_.seekSample(m.samplePos); break;
+        case TransportOp::SeekBeat:    if (!std::isnan(m.beat)) transport_.seekBeat(m.beat); break;
+        case TransportOp::SetLoopRegion: transport_.setLoopRegion(m.v0, m.v1); break;
+        case TransportOp::LoopOn:      transport_.setLooping(true); break;
+        case TransportOp::LoopOff:     transport_.setLooping(false); break;
+        case TransportOp::SetTempo:    transport_.setTempo(m.v0); break;
+        case TransportOp::NudgeTempo:  transport_.nudgeTempo(m.v0); break;
+        case TransportOp::SetTimeSig:
+            transport_.setTimeSig(static_cast<int>(m.a >> 16),
+                                  static_cast<int>(m.a & 0xFFFFu));
+            break;
+        case TransportOp::MetronomeOn:  transport_.setMetronome(true); break;
+        case TransportOp::MetronomeOff: transport_.setMetronome(false); break;
+        case TransportOp::SetTimebaseSource:
+            if (m.a <= static_cast<uint32_t>(TimebaseSource::MidiClockSlave))
+                transport_.setTimebaseSource(static_cast<TimebaseSource>(m.a));
             break;
     }
 }
@@ -78,25 +94,29 @@ void AudioEngine::render(float* const* outputs, int numFrames,
     });
     midiParams_.drainDirty([](NodeUid, ParamKeyHash, double, uint32_t) {});
 
-    // 3) Keep the duplex input flowing (monitor/record taps arrive M2/M6).
+    // 3) Advance the transport: claims any offered tempo base, splits the
+    //    block at a loop wrap. Spans drive the MidiScheduler (M1 f3) and the
+    //    graph render (M2); until then they only carry the clock forward.
+    TransportSpan spans[2];
+    transport_.advance(numFrames, spans);
+
+    // 4) Keep the duplex input flowing (monitor/record taps arrive M2/M6).
     float* ins[kMaxChannels] = { inScratchL_, inScratchR_ };
     input.consume(ins, numFrames);
 
-    // 4) Render: silence until the PlaybackGraph lands (M2).
+    // 5) Render: silence until the PlaybackGraph lands (M2).
     for (int c = 0; c < kMaxChannels; ++c)
         for (int f = 0; f < numFrames; ++f) outputs[c][f] = 0.0f;
 
-    // 5) Advance placeholder transport and publish the block clock.
-    if (playing_) samplePos_ += numFrames;
+    // 6) Publish the block clock from the real transport.
     TransportClockData d;
-    d.samplePos = samplePos_;
-    d.bpm = bpm_;
-    d.beat = driver_.sampleRate() > 0.0
-                 ? static_cast<double>(samplePos_) / driver_.sampleRate() * (bpm_ / 60.0)
-                 : 0.0;
-    d.flags = (playing_ ? kClockPlaying : 0u) |
-              (recording_ ? kClockRecording : 0u) |
-              (looping_ ? kClockLooping : 0u);
+    d.samplePos = transport_.positionSamples();
+    d.beat = transport_.positionBeat();
+    d.bpm = transport_.bpm();
+    d.flags = (transport_.playing()   ? kClockPlaying   : 0u) |
+              (transport_.recording() ? kClockRecording : 0u) |
+              (transport_.looping()   ? kClockLooping   : 0u) |
+              (transport_.metronome() ? kClockMetronome : 0u);
     clock_.publish(d);
 }
 

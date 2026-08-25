@@ -9,14 +9,14 @@
 #include "../core/Seqlock.h"
 #include "../core/SpscRing.h"
 #include "../core/TimeAnchor.h"
+#include "../sequencer/TransportEngine.h"
 #include "OboeDriver.h"
 
 // Engine facade and the realtime callback spine (blueprint engine/ module).
-// M0 skeleton scope: owns the driver, the per-producer message channels
-// (CONTRACTS.md seam 2), and the readback publications; renders silence.
-// The seams left open are exactly the blueprint's: TransportEngine replaces
-// the placeholder transport state at M1, PlaybackGraph swap-in arrives at M2
-// (the ParamMoveTables already retain values for post-swap re-apply), and
+// Owns the driver, the per-producer message channels (CONTRACTS.md seam 2),
+// the TransportEngine (TempoMap + span-splitting advance, M1), and the
+// readback publications; renders silence until the PlaybackGraph swaps in
+// at M2 (the ParamMoveTables already retain values for post-swap re-apply);
 // instruments consume note events from M4.
 //
 // Threading: start/stop and the producer accessors are non-RT (JNI and MIDI
@@ -27,14 +27,15 @@ namespace daw {
 // Per-block transport snapshot for UI playheads (blueprint 2.5 readback).
 struct TransportClockData {
     int64_t samplePos = 0;
-    double  beat = 0.0;         // real beat mapping arrives with TempoMap (M1)
+    double  beat = 0.0;         // via the installed TempoMap
     double  bpm = 120.0;
-    uint32_t flags = 0;         // bit0 playing, bit1 recording, bit2 looping
+    uint32_t flags = 0;         // kClock* bits
 };
 
 inline constexpr uint32_t kClockPlaying   = 1u << 0;
 inline constexpr uint32_t kClockRecording = 1u << 1;
 inline constexpr uint32_t kClockLooping   = 1u << 2;
+inline constexpr uint32_t kClockMetronome = 1u << 3;
 
 class AudioEngine final : public RenderSink {
 public:
@@ -58,6 +59,10 @@ public:
     }
     const OboeDriver& driver() const noexcept { return driver_; }
     OboeDriver&       driver() noexcept { return driver_; }
+    // Non-RT reads of live transport facts go through clock(); this accessor
+    // exists for the bridge's status assembly and the builder's map access.
+    const TransportEngine& transport() const noexcept { return transport_; }
+    TransportEngine&       transport() noexcept { return transport_; }
     uint64_t droppedNotes() const noexcept { return droppedNotes_.load(std::memory_order_relaxed); }
     uint64_t panics() const noexcept { return panics_.load(std::memory_order_relaxed); }
 
@@ -82,12 +87,8 @@ private:
     Seqlock<TransportClockData> clock_;
     SpscRing<MeterFrame, 512>  meterBus_;
 
-    // Placeholder transport state until TransportEngine lands (M1).
-    int64_t samplePos_ = 0;
-    double  bpm_ = 120.0;
-    bool    playing_ = false;
-    bool    recording_ = false;
-    bool    looping_ = true;
+    // The real transport (M1): TempoMap + state machine + span splitting.
+    TransportEngine transport_;
 
     // Input drain scratch (monitoring paths arrive at M2/M6).
     float inScratchL_[kMaxBlock]{};

@@ -2,7 +2,7 @@
 
 This document is the **authoritative living map of the codebase**, maintained and kept continuously synchronized with every class, interface, method, and relationship implemented across the architecture (both Native C++ NDK DSP Engine and Kotlin UDF Layer).
 
-**Scope:** this map documents code that exists in the source tree today. The target end-state architecture is specified in [`docs/spec/ARCHITECTURE_BLUEPRINT.md`](spec/ARCHITECTURE_BLUEPRINT.md) (contracts: [`CONTRACTS.md`](spec/CONTRACTS.md); functional specs: [`SPEC_PART1_FUNCTIONAL.md`](spec/SPEC_PART1_FUNCTIONAL.md), [`SPEC_PART2_WORKFLOW.md`](spec/SPEC_PART2_WORKFLOW.md)); classes move into this map when their source lands. The old pre-blueprint C++ skeleton has been fully removed - `app/src/main/cpp/` now contains only new-engine modules (`core/`, `dsp/`, `engine/`, `jni/`) built to the blueprint, not yet wired into the Gradle build (that happens when the engine is ready to link; blueprint M0).
+**Scope:** this map documents code that exists in the source tree today. The target end-state architecture is specified in [`docs/spec/ARCHITECTURE_BLUEPRINT.md`](spec/ARCHITECTURE_BLUEPRINT.md) (contracts: [`CONTRACTS.md`](spec/CONTRACTS.md); functional specs: [`SPEC_PART1_FUNCTIONAL.md`](spec/SPEC_PART1_FUNCTIONAL.md), [`SPEC_PART2_WORKFLOW.md`](spec/SPEC_PART2_WORKFLOW.md)); classes move into this map when their source lands. The old pre-blueprint C++ skeleton has been fully removed - `app/src/main/cpp/` now contains only new-engine modules (`core/`, `dsp/`, `engine/`, `jni/`, `sequencer/`) built to the blueprint, not yet wired into the Gradle build (that happens when the engine is ready to link; blueprint M0).
 
 ```mermaid
 classDiagram
@@ -184,6 +184,98 @@ classDiagram
         +readLinear(delay: float) float
         +readHermite(delay: float) float
     }
+    %% ---- M1 sequencer/ (time system: TempoMap + TransportEngine) ----
+    class TempoSegment {
+        <<piecewise-linear map atom; ramps/curves densified into these by the builder>>
+        +double startBeat
+        +int64_t startSample
+        +double samplesPerBeat
+    }
+    class TimeSigEvent {
+        <<bar-aligned meter change; beats are quarter notes>>
+        +double startBeat
+        +int32_t barAtStart
+        +uint16_t numerator
+        +uint16_t denominator
+    }
+    class TempoMapBase {
+        <<immutable builder-compiled map: segments + time sigs; carries epoch (OfferSlot) + foldRev (tail retention)>>
+        +uint64_t epoch
+        +uint32_t foldRev
+        +FixedVector~TempoSegment~ segments
+        +FixedVector~TimeSigEvent~ timeSigs
+    }
+    class TempoTailEvent {
+        <<RT-appended live tempo splice, anchored at the exact transport position (continuous by construction); rev for base-claim retention>>
+        +double startBeat
+        +int64_t startSample
+        +double samplesPerBeat
+        +uint32_t rev
+    }
+    class TempoTailBlock {
+        <<seqlock-published POD tail view for background readers>>
+        +uint32_t count
+        +uint32_t rev
+        +TempoTailEvent[] events
+    }
+    class TempoMap {
+        <<musical time authority (CONTRACTS TempoMap contract): immutable base (epoch offer/ack swap) + fixed-cap RT tail (seqlock, rev bump per append/claim); governing rule = newest tail event at-or-before position else base segment; claim retains tail events with rev > foldRev; background snapshot = mutex bgBase + seqlock tail, rev-stamped, RT never touches the mutex>>
+        +prepare(sampleRate, defaultBpm)
+        +rtSetTempo(bpm, atSample, atBeat)
+        +rtNudgeTempo(bpmDelta, atSample, atBeat)
+        +rtClaimOfferedBase() bool
+        +rtTailNeedsConsolidation() bool
+        +beatAt(sample) double
+        +sampleAt(beat) int64_t
+        +bpmAt(beat) double
+        +barBeatAt(beat) BarBeat
+        +rev() uint32_t
+        +offerBase(built) TempoMapBase*
+        +retiredBaseAcked(epoch) bool
+        +publishBackgroundBase(base)
+        +snapshot() Snapshot
+    }
+    class TransportSpan {
+        <<one contiguous musical slice of a render block (loop wrap splits at the boundary); interior beat positions must convert through the map per event>>
+        +int64_t startSample
+        +double startBeat
+        +double endBeat
+        +int offsetFrames
+        +int frames
+        +bool wrapped
+    }
+    class TransportEngine {
+        <<RT transport state machine over the TempoMap: play/pause/stop-to-zero, record+metronome flags, seeks, loop region (beat-anchored, sample anchors recomputed on tempo events/base claims), TimebaseSource seam (Internal live; Link/MidiClockSlave via SyncAdapter M16, external authority rejects tempo msgs + counts), advance() = claim offered base then split block at loop wrap (1-2 spans, one wrap per block)>>
+        +prepare(sampleRate, defaultBpm)
+        +play()
+        +stop()
+        +togglePlay()
+        +setRecording(on)
+        +setLooping(on)
+        +setMetronome(on)
+        +seekSample(sample)
+        +seekBeat(beat)
+        +setLoopRegion(startBeat, endBeat)
+        +setTempo(bpm)
+        +nudgeTempo(bpmDelta)
+        +setTimeSig(numerator, denominator)
+        +setTimebaseSource(src: TimebaseSource)
+        +advance(numFrames, out: TransportSpan[2]) int
+        +tempoMap() TempoMap
+        +positionSamples() int64_t
+        +positionBeat() double
+        +bpm() double
+    }
+
+    TempoMap *-- TempoMapBase
+    TempoMap *-- TempoTailEvent
+    TempoMap ..> TempoTailBlock
+    TempoMap ..> Seqlock
+    TempoMap ..> OfferSlot
+    TempoMapBase ..> FixedVector
+    TransportEngine *-- TempoMap
+    TransportEngine ..> TransportSpan
+
     %% ---- M0 engine/ (NEW ENGINE - driver + callback spine) ----
     class StreamTime {
         <<per-callback DAC anchor from Oboe stream timestamps>>
@@ -223,7 +315,7 @@ classDiagram
         +uint32_t flags
     }
     class AudioEngine {
-        <<facade + RT callback spine: anchor publish -> bounded ring drains -> param-table drain (values retained for post-swap reapply) -> input consume -> render (silence until M2 graph) -> clock publish. Seams open for TransportEngine (M1), PlaybackGraph (M2), instruments (M4)>>
+        <<facade + RT callback spine: anchor publish -> bounded ring drains (transport ops -> TransportEngine) -> param-table drain (values retained for post-swap reapply) -> transport advance (base claim + loop-wrap spans) -> input consume -> render (silence until M2 graph) -> clock publish from real transport. Same-rate reopen keeps transport state; rate change re-prepares. Seams open: PlaybackGraph (M2), instruments (M4)>>
         +start(cfg: OboeDriver.Config) bool
         +stop()
         +jniEvents() EventRing
@@ -233,6 +325,7 @@ classDiagram
         +popMeter(out: MeterFrame) bool
         +clock() TransportClockData
         +anchor() TimeAnchor
+        +transport() TransportEngine
         +render(outputs, numFrames, input, time)
     }
 
@@ -240,6 +333,7 @@ classDiagram
     OboeDriver ..> RenderSink
     OboeDriver *-- InputJitterRing
     AudioEngine *-- OboeDriver
+    AudioEngine *-- TransportEngine
     AudioEngine *-- ParamMoveTable
     AudioEngine ..> EngineMessage
     AudioEngine ..> MeterFrame
@@ -284,6 +378,7 @@ classDiagram
         +uint32_t xruns
         +uint32_t droppedNotes
         +uint32_t panics
+        +uint32_t timeSigPacked
     }
     class BridgeHandle {
         <<one native engine session; NativeAudioBridge.cpp is the ONLY jni.h TU, natives RegisterNatives'd from JNI_OnLoad against Kotlin NativeAudioBridge; jlong handle = pointer; lifecycle+push confined to the Kotlin engine-io thread>>
