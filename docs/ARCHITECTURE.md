@@ -2,7 +2,7 @@
 
 This document is the **authoritative living map of the codebase**, maintained and kept continuously synchronized with every class, interface, method, and relationship implemented across the architecture (both Native C++ NDK DSP Engine and Kotlin UDF Layer).
 
-**Scope:** this map documents code that exists in the source tree today. The target end-state architecture is specified in [`docs/spec/ARCHITECTURE_BLUEPRINT.md`](spec/ARCHITECTURE_BLUEPRINT.md) (built from the functional specs [`SPEC_PART1_FUNCTIONAL.md`](spec/SPEC_PART1_FUNCTIONAL.md) and [`SPEC_PART2_WORKFLOW.md`](spec/SPEC_PART2_WORKFLOW.md)); classes move into this map when their source lands. The C++ classes under `app/src/main/cpp/` are present in source but not wired into the Gradle build, and are **condemned as reference-only**: they implement the blueprint's rejected mutable-shared-graph approach (string ids on RT nodes, string-keyed setParameter, mutable add/removeTrack) and must not be extended. They are replaced module-by-module from the blueprint's M0 milestone onward; their map entries below describe the code as it exists until each replacement lands.
+**Scope:** this map documents code that exists in the source tree today. The target end-state architecture is specified in [`docs/spec/ARCHITECTURE_BLUEPRINT.md`](spec/ARCHITECTURE_BLUEPRINT.md) (contracts: [`CONTRACTS.md`](spec/CONTRACTS.md); functional specs: [`SPEC_PART1_FUNCTIONAL.md`](spec/SPEC_PART1_FUNCTIONAL.md), [`SPEC_PART2_WORKFLOW.md`](spec/SPEC_PART2_WORKFLOW.md)); classes move into this map when their source lands. The old pre-blueprint C++ skeleton has been fully removed - `app/src/main/cpp/` now contains only new-engine modules (`core/`, `dsp/`) built to the blueprint, not yet wired into the Gradle build (that happens when the engine is ready to link; blueprint M0).
 
 ```mermaid
 classDiagram
@@ -12,267 +12,9 @@ classDiagram
     ComponentActivity <|-- MainActivity
     RoomDatabase <|-- DawDatabase
 
-    %% Native C++ Graph Nodes
-    AudioNode <|-- TrackNode
-    AudioNode <|-- GroupTrackNode
-    AudioNode <|-- ReturnTrackNode
-    AudioNode <|-- MasterNode
-    AudioNode <|-- DeviceNode
-
-    %% Native C++ Device Hierarchy
-    DeviceNode <|-- InstrumentNode
-    DeviceNode <|-- EffectNode
-
-    InstrumentNode <|-- SubtractiveSynth
-    InstrumentNode <|-- WavetableSynth
-    InstrumentNode <|-- FMSynth
-    InstrumentNode <|-- DrumRackNode
-    InstrumentNode <|-- AdvancedSamplerNode
-
-    EffectNode <|-- ParametricEQNode
-    EffectNode <|-- CompressorNode
-    EffectNode <|-- ReverbNode
-    EffectNode <|-- DelayNode
-    EffectNode <|-- ChorusNode
-    EffectNode <|-- TapeDelayNode
-    EffectNode <|-- LimiterNode
-    EffectNode <|-- MeteringNode
-
-    %% Sequencer Engines
-    PlaybackEngine <|-- ArrangementEngine
-
     %% ==========================================
     %% 1. NATIVE REAL-TIME C++ AUDIO ENGINE (NDK)
     %% ==========================================
-    class AudioNode {
-        <<abstract>>
-        #string id_
-        #NodeType type_
-        #bool isEnabled_
-        #bool isMuted_
-        #bool isSoloed_
-        +prepareToPlay(sampleRate: double, maxBlockSize: size_t)*
-        +process(ctx: ProcessContext, inBuffers: float**, outBuffers: float**)*
-        +releaseResources()*
-        +getId() string
-        +getType() NodeType
-        +setEnabled(enabled: bool)
-        +setMuted(muted: bool)
-        +setSoloed(soloed: bool)
-    }
-
-    class TrackNode {
-        -int32_t trackIndex_
-        -DeviceChain deviceChain_
-        -float volumeDb_
-        -float pan_
-        -bool isArmed_
-        -SmoothedValue~float~ volumeSmoother_
-        -SmoothedValue~float~ panSmoother_
-        +prepareToPlay(sampleRate: double, maxBlockSize: size_t)
-        +process(ctx: ProcessContext, inBuffers: float**, outBuffers: float**)
-        +setVolumeDb(volumeDb: float)
-        +setPan(pan: float)
-        +setArmed(armed: bool)
-        +getDeviceChain() DeviceChain
-        +getMeterFrame() MeterFrame
-    }
-
-    class GroupTrackNode {
-        -int32_t groupIndex_
-        -array~int32_t, 16~ childTrackIndices_
-        -size_t childCount_
-        -DeviceChain deviceChain_
-        -SmoothedValue~float~ volumeSmoother_
-        -SmoothedValue~float~ panSmoother_
-        +addChildTrack(trackIndex: int32_t) bool
-        +removeChildTrack(trackIndex: int32_t) bool
-        +process(ctx: ProcessContext, inBuffers: float**, outBuffers: float**)
-    }
-
-    class ReturnTrackNode {
-        -int32_t returnIndex_
-        -DeviceChain deviceChain_
-        -SmoothedValue~float~ volumeSmoother_
-        -SmoothedValue~float~ panSmoother_
-        +setVolumeDb(volumeDb: float)
-        +setPan(pan: float)
-        +getDeviceChain() DeviceChain
-        +process(ctx: ProcessContext, inBuffers: float**, outBuffers: float**)
-    }
-
-    class MasterNode {
-        -DeviceChain deviceChain_
-        -float volumeDb_
-        -float limiterCeilingDb_
-        -bool isLimiterEnabled_
-        -SmoothedValue~float~ volumeSmoother_
-        +setVolumeDb(volumeDb: float)
-        +setLimiterCeilingDb(ceilingDb: float)
-        +setLimiterEnabled(enabled: bool)
-        +getDeviceChain() DeviceChain
-        +getMasterMeterFrame() MeterFrame
-        +process(ctx: ProcessContext, inBuffers: float**, outBuffers: float**)
-    }
-
-    class RoutingMatrix {
-        -array~array~SmoothedValue~float~, 8~, 64~ sendSmoothers_
-        -array~int, 64~ sidechainSources_
-        +prepare(sampleRate: double)
-        +setSendLevel(srcTrack: size_t, returnIndex: size_t, level: float)
-        +getNextSmoothedSend(srcTrack: size_t, returnIndex: size_t) float
-        +setSidechainRoute(destTrack: size_t, srcTrack: int)
-        +getSidechainSource(destTrack: size_t) int
-    }
-
-    class AudioGraph {
-        -array~TrackNode, 64~ tracks_
-        -array~ReturnTrackNode, 8~ returnTracks_
-        -MasterNode masterNode_
-        -RoutingMatrix routingMatrix_
-        -AudioBufferPool bufferPool_
-        +prepare(sampleRate: double, maxBlockSize: size_t)
-        +process(ctx: ProcessContext, outputBuffers: float**)
-        +addTrack(id: string) TrackNode
-        +removeTrack(trackIndex: size_t) bool
-        +getTrack(index: size_t) TrackNode
-        +getReturnTrack(index: size_t) ReturnTrackNode
-        +getMasterNode() MasterNode
-        +getRoutingMatrix() RoutingMatrix
-        +collectMeterFrames(dest: MeterFrame*, maxFrames: size_t) size_t
-    }
-
-    class DeviceNode {
-        <<abstract>>
-        +setParameter(paramName: string, value: float)*
-        +getParameter(paramName: string) float*
-    }
-
-    class DeviceChain {
-        -array~DeviceNode, 16~ devices_
-        -size_t deviceCount_
-        +prepare(sampleRate: double, maxBlockSize: size_t)
-        +process(ctx: ProcessContext, inBuffers: float**, outBuffers: float**)
-        +addDevice(device: DeviceNode) bool
-        +removeDevice(index: size_t) bool
-        +getDevice(index: size_t) DeviceNode
-        +getDeviceCount() size_t
-    }
-
-    class InstrumentNode {
-        <<abstract>>
-        #int polyphony_
-        +noteOn(noteNumber: int, velocity: float)*
-        +noteOff(noteNumber: int)*
-        +allNotesOff()*
-        +setPitchBend(bendSemitones: float)*
-        +setModWheel(modWheel: float)*
-    }
-
-    class EffectNode {
-        <<abstract>>
-        #float mix_
-        #SmoothedValue~float~ dryWetSmoother_
-        +setDryWet(mix: float)
-        +getDryWet() float
-    }
-
-    class SubtractiveSynth {
-        +noteOn(noteNumber: int, velocity: float)
-        +noteOff(noteNumber: int)
-        +setFilterCutoff(cutoffHz: float)
-        +setFilterResonance(resonance: float)
-    }
-
-    class WavetableSynth {
-        +setTablePosition(pos: float)
-        +setWarpMode(mode: int)
-        +noteOn(noteNumber: int, velocity: float)
-    }
-
-    class FMSynth {
-        +setAlgorithm(algorithm: int)
-        +setOperatorRatio(op: int, ratio: float)
-        +setOperatorLevel(op: int, level: float)
-    }
-
-    class DrumRackNode {
-        +triggerPad(padIndex: int, velocity: float)
-        +setPadSample(padIndex: int, sampleBuffer: float*, numFrames: size_t)
-    }
-
-    class AdvancedSamplerNode {
-        +loadSample(buffer: float*, numFrames: size_t, sampleRate: double)
-        +setLoopRegion(startFrame: size_t, endFrame: size_t)
-        +noteOn(noteNumber: int, velocity: float)
-    }
-
-    class ParametricEQNode {
-        +setBand(index: int, type: int, freqHz: float, q: float, gainDb: float)
-    }
-
-    class CompressorNode {
-        +setThresholdDb(thresholdDb: float)
-        +setRatio(ratio: float)
-        +setAttackMs(attackMs: float)
-        +setReleaseMs(releaseMs: float)
-    }
-
-    class ReverbNode {
-        +setRoomSize(size: float)
-        +setDamping(damping: float)
-        +setPreDelayMs(ms: float)
-    }
-
-    class DelayNode {
-        +setDelayTimeMs(ms: float)
-        +setFeedback(feedback: float)
-        +setPingPong(enabled: bool)
-    }
-
-    class ChorusNode {
-        +setRate(rate: float)
-        +setDepth(depth: float)
-    }
-
-    class TapeDelayNode {
-        +setDelayTime(ms: float)
-        +setFeedback(fb: float)
-        +setWowDepth(depth: float)
-    }
-
-    class LimiterNode {
-        +setCeilingDb(ceilingDb: float)
-        +setLookaheadMs(ms: float)
-    }
-
-    class MeteringNode {
-        +getMeterFrame() MeterFrame
-    }
-
-    class TransportEngine {
-        -double currentBeat_
-        -double samplePosition_
-        -float bpm_
-        -int timeSigNum_
-        -int timeSigDen_
-        -bool isPlaying_
-        -bool isLooping_
-        +advance(numFrames: size_t, sampleRate: double)
-        +seekToBeat(beat: double)
-        +setBpm(bpm: float)
-        +setLoop(startBeat: double, endBeat: double)
-    }
-
-    class PlaybackEngine {
-        <<abstract>>
-        +evaluate(startBeat: double, endBeat: double, track: TrackNode)*
-    }
-
-    class ArrangementEngine {
-        +evaluate(startBeat: double, endBeat: double, track: TrackNode)
-    }
-
     %% ---- M0 core/ (NEW ENGINE - realtime infrastructure, CONTRACTS.md) ----
     class SpscRing~T_Capacity~ {
         <<single-producer single-consumer ring, acquire-release, cache-line-split indices>>
@@ -389,8 +131,6 @@ classDiagram
         +~ScopedNoDenormals()
     }
 
-    %% Native DSP primitives & support types (header-only helpers used
-    %% inside the nodes above; listed for completeness of the map)
     %% ---- M0 dsp/ (NEW ENGINE - pure DSP primitives, host-compilable) ----
     class Oscillator {
         <<polyBLEP band-limited: sine, saw, pulse (PWM), triangle; hard sync>>
@@ -444,58 +184,6 @@ classDiagram
         +readLinear(delay: float) float
         +readHermite(delay: float) float
     }
-    class MoogLadderFilter {
-        <<4-pole ladder LPF>>
-    }
-    class CombFilter {
-        <<reverb comb stage>>
-    }
-    class AllpassFilter {
-        <<reverb allpass stage>>
-    }
-    class AudioFileDecoder {
-        <<WAV decode>>
-    }
-    class Resampler {
-        <<rate conversion>>
-    }
-    class FFTProcessor {
-        <<radix-2 FFT>>
-    }
-    class SubtractiveVoice {
-        <<voice struct>>
-    }
-    class WavetableVoice {
-        <<voice struct>>
-    }
-    class FMVoice {
-        <<voice struct>>
-    }
-    class FMOperatorConfig {
-        <<operator params>>
-    }
-    class DrumPadVoice {
-        <<pad voice struct>>
-    }
-    class SamplerVoice {
-        <<voice struct>>
-    }
-    class ADSRData {
-        <<envelope params>>
-    }
-    class BiquadCoeffs {
-        <<EQ band coeffs>>
-    }
-    class BiquadState {
-        <<EQ band state>>
-    }
-    class NativeMidiNote {
-        <<sequencer event struct>>
-    }
-    class NativeArrangementClip {
-        <<sequencer clip struct>>
-    }
-
     %% ==========================================
     %% 2. APP ENTRY POINT & WORKSPACE SCREENS (EARTH.DESIGN)
     %% ==========================================
@@ -1002,18 +690,6 @@ classDiagram
     %% ==========================================
     %% 7. RELATIONSHIPS & DEPENDENCY FLOW
     %% ==========================================
-    AudioGraph *-- TrackNode
-    AudioGraph *-- GroupTrackNode
-    AudioGraph *-- ReturnTrackNode
-    AudioGraph *-- MasterNode
-    AudioGraph *-- RoutingMatrix
-    AudioGraph *-- AudioBufferPool
-
-    TrackNode *-- DeviceChain
-    GroupTrackNode *-- DeviceChain
-    ReturnTrackNode *-- DeviceChain
-    MasterNode *-- DeviceChain
-    DeviceChain *-- DeviceNode
 
     MainActivity ..> MainDawScreen
     MainDawScreen ..> ProjectStore

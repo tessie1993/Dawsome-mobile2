@@ -6,6 +6,17 @@ Newest entry first. Each entry: where the build stands, what comes next.
 
 ---
 
+## 2026-08-25 (later) — condemned skeleton fully removed
+
+Per the owner's directive after review sign-off: all code in direct argument
+with the approved blueprint is gone so building agents cannot be confused by
+it. Deleted the entire old pre-blueprint C++ skeleton (49 files: graph/,
+device/, sequencer/ — mutable shared graph, string-keyed params, the
+blueprint's rejected alternative). `app/src/main/cpp/` now contains ONLY
+new-engine modules (core/, dsp/) plus CMakeLists. The living map carries 75
+classes, all with source, sweep green. Anyone needing the old code finds it
+in git history before this commit.
+
 ## 2026-08-25 — M0 in progress (2 of 4 features done)
 
 **Done so far**
