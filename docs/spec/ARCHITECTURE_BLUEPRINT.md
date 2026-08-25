@@ -1,365 +1,516 @@
-# Dawsome Architecture Blueprint
+# Dawsome Architecture Blueprint (rev 2 — post DSP review round 1)
 
 **Status:** authoritative target architecture for the full product defined by
 `docs/spec/SPEC_PART1_FUNCTIONAL.md` (22 functional areas) and
 `docs/spec/SPEC_PART2_WORKFLOW.md` (workflow, signal flow, instruments, MIDI tools,
 effects, racks, automation, phone translation).
-This document is a blueprint: modules, classes, responsibilities, data flow and
-threading contracts — **no code**. `docs/ARCHITECTURE.md` remains the living map of
-code that exists; classes graduate from this blueprint into that map as they land.
+This document is a blueprint: modules, classes, responsibilities, data flow,
+threading contracts and seam contracts — **no code**. `docs/ARCHITECTURE.md`
+remains the living map of code that exists; classes graduate from this blueprint
+into that map as they land.
 
 Authority order: the two spec documents → this blueprint → the living map.
+Rev 2 incorporates all blocking findings of DSP review round 1 (command
+architecture, duplex I/O, recording alignment, rate policy, swap/adoption
+protocol, edit sequencing, timeline change class, sync placement, bypass/PDC,
+voice budget, cue bus, warp budget, stable param identity, MP3 removal,
+contracts layer) plus its recommendations and coverage gaps.
 
 Research grounding: Tracktion Engine (model/playback-graph separation, pooled
-buffers, latency balancing, background stretch threads), Google Oboe guidance
-(LowLatency + Exclusive/MMAP, device-native rate, non-blocking callbacks),
-Ableton Link SDK (dual GPLv2/proprietary), signalsmith-stretch (MIT),
-pffft (BSD-like), WORLD (modified-BSD), dr_libs (public-domain/MIT-0),
-libFLAC (BSD), Android AMidi / android.media.midi, MediaCodec for AAC/MP3.
+buffers, latency balancing, background stretch), Google Oboe guidance
+(LowLatency+Exclusive/MMAP, device-native rate, non-blocking callbacks, full-
+duplex = output callback + callback-less input stream), Ableton Link SDK (RT
+capture/commit API; dual GPLv2/proprietary), signalsmith-stretch (MIT), pffft
+(BSD-like), WORLD (modified-BSD), dr_libs (PD/MIT-0), libFLAC (BSD), AMidi /
+android.media.midi, MediaCodec (AAC encode; **no MP3 encoder exists on Android**).
+
+**Existing `app/src/main/cpp/` skeleton is condemned as reference-only.** It
+implements this blueprint's rejected alternative (mutable shared graph,
+`std::string` ids on RT nodes, string-keyed setParameter). Nothing may extend it;
+its files are replaced module-by-module from M0 onward.
 
 ---
 
 ## 1. Fixed product & platform decisions
 
-These resolve the specs' "Open decisions" for the build. Each is changeable, but code
-assumes them until changed here.
-
 | # | Decision | Value | Rationale |
 |---|---|---|---|
 | D1 | Platform | Android only, minSdk 24, Kotlin + Compose UI, C++20 NDK engine | Existing repo; Oboe floor |
-| D2 | Audio I/O | Oboe; `PerformanceMode::LowLatency` + `SharingMode::Exclusive`, device-native sample rate (typically 48 kHz), float32 processing | Lowest latency path (MMAP where available) |
-| D3 | Internal format | 32-bit float, de-interleaved channel pointers, block size = burst size (with engine-side fixed maxBlock 1024 for allocation) | NEON-friendly, Oboe native |
-| D4 | Capacities | 64 user tracks, 8 group tracks, 8 return tracks, 1 master, 16 devices/chain, 8 chains/rack, rack nesting depth 3, 8 scenes visible/∞ stored, 16 macro slots (8 primary), 64-voice global polyphony budget | Fixed-capacity RT structures; phone-realistic |
-| D5 | Sample rates | Project = device rate; import resampled on load path; export 44.1/48/96 kHz, 16/24-bit WAV, FLAC, AAC/MP3 (MediaCodec) | Avoid RT resampling of the whole graph |
-| D6 | Plug-ins | No third-party plug-in hosting at launch | Spec leaves open; huge scope |
-| D7 | Time-stretch | signalsmith-stretch (MIT) as WarpEngine core; repitch mode via resampler | License-safe, high quality |
-| D8 | Ableton Link | Behind `SyncAdapter` interface; OFF by default; GPLv2/commercial decision flagged to the owner before shipping | License isolation |
-| D9 | Tuning | 12-TET + named scales only (spec's custom-tuning question: deferred) | Scope |
-| D10 | Stem separation | Not in core (spec open question: deferred) | Scope |
-| D11 | Noise reduction | Offline render + preview (not RT at launch) | CPU realism |
-| D12 | Project interchange | Own format + audio/stem/MIDI export; no desktop-DAW project export at launch | Spec open question |
-| D13 | Native lib | Single `libdawcore.so`, single JNI seam | One bridge, one codec |
+| D2 | Audio I/O | Oboe output stream with callback, `PerformanceMode::LowLatency` + `SharingMode::Exclusive` (fallback shared), device-native rate; **full-duplex = input stream opened without callback, drained non-blocking inside the output callback through an InputJitterRing** (primed ~2 bursts; underfill → zeros + counter) | Oboe-recommended duplex; one clock master (output) |
+| D3 | Internal format | float32, de-interleaved; callback `numFrames` is variable — engine sub-chunks into ≤ `maxBlock` (1024) slices; all RT capacity sized to `maxBlock` | NEON; Oboe reality |
+| D4 | Capacities | 64 user tracks, 8 groups, 8 returns, 1 master, 16 devices/chain, 8 chains/rack, rack nesting 3, 16 macros (8 primary), **global voice budget 64 enforced by VoiceBudgetLedger**, scenes unbounded in model / TimelineSnapshot carries a bounded launch window | RT pre-allocation; phone-honest |
+| D5 | Rates & formats | Engine runs at device rate. Originals never resampled in place; SampleCache/proxy caches keyed by `(fileId, targetRate)`; recordings tagged with capture rate and conformed on playback (per-clip resampler) until background re-conform. Export: 44.1/48/96 kHz, 16/24-bit WAV, FLAC, AAC (MediaCodec). **MP3 export dropped** (Android has no MP3 encoder; LAME rejected: LGPL + extra .so vs D13) | Route changes are survivable; license-clean |
+| D6 | Plug-ins | No third-party plug-in hosting at launch | Scope |
+| D7 | Time-stretch | signalsmith-stretch (MIT); repitch via resampler; **RT stretch budget per device class** (§7.4) with proxy fallback | License + phone CPU |
+| D8 | Ableton Link | `SyncAdapter` implemented in C++ `engine/` (RT-safe capture/commit in the callback); Kotlin only enables/configures. OFF by default; GPLv2/commercial decision flagged to the owner before shipping | Phase alignment is RT work |
+| D9 | Tuning | 12-TET + named scales (custom tunings deferred) | Scope |
+| D10 | Stem separation | Not in core | Scope |
+| D11 | Noise reduction | Offline render + preview | CPU realism |
+| D12 | Interchange | Own format + audio/stems/MIDI export | Scope |
+| D13 | Native lib | Single `libdawcore.so`, single JNI seam; `core/` and `dsp/` stay host-compilable (a desktop CMake test target exists from M0 even while un-run) | One bridge; testability seam |
 
 ---
 
 ## 2. Concurrency & data-flow model (the load-bearing design)
 
-### 2.1 Dual-model architecture
+### 2.1 Dual model, three change classes
 
-Two representations of the same project, never shared mutably:
+- **Edit model (Kotlin)** — immutable `ProjectState`, single source of truth,
+  mutated only via `ProjectStore.dispatch`. Every committed edit carries a
+  monotonic **editSeq**.
+- **Realtime model (C++)** — `PlaybackGraph` (mix topology) + per-clip
+  `TimelineSnapshot`s (playable content). Derived, disposable, epoch-managed.
 
-- **Edit model (Kotlin)** — `ProjectState`: immutable, undoable, serializable. The
-  single source of truth for *what the project is*. Mutated only via
-  `ProjectStore.dispatch(ProjectAction)` reducers.
-- **Realtime model (C++)** — `PlaybackGraph` + `TimelineSnapshot`: allocation-free,
-  lock-free-read structures the audio thread walks. Derived, disposable, rebuilt.
+Every change is classified:
 
-Bridging rule: *parameter-shaped* changes (volume, pan, device param, macro, send
-level, mute/solo, tempo nudge) flow as **EngineCommands** through a lock-free SPSC
-queue and are applied by the audio thread between blocks. *Structure-shaped* changes
-(add/remove/reorder track/device/clip/scene, routing, warp map edits, chain zones)
-mark the realtime model dirty and trigger an asynchronous **graph rebuild**.
+1. **Parameter-shaped** (fader, pan, device param, macro, send, mute/solo,
+   bypass, simple tempo set/nudge, transport ops, notes from UI input) →
+   realtime message paths (§2.2), no rebuild.
+2. **Timeline-shaped** (note add/move/delete, automation & envelope points,
+   step edits, warp-marker edits, clip gain/fades, groove amount) → background
+   rebuild of the affected clip's `TimelineSnapshot` only, atomic per-clip
+   pointer swap, epoch GC (§2.4). `MidiClipPlayer` keeps a sounding-note table
+   and reconciles at swap: notes whose note-off vanished get synthetic offs —
+   no stuck notes when editing a playing clip.
+3. **Structure-shaped** (add/remove/reorder tracks, devices, chains, zones,
+   routing, sends, sidechain edges, rack topology, warp-mode switch, complex
+   tempo-map edits) → full graph rebuild + swap (§2.3).
 
-### 2.2 Graph rebuild & swap (Tracktion-informed)
+### 2.2 Realtime message architecture (no single magic queue)
 
-- `GraphBuilder` (background thread) compiles the latest `EngineModel` (a compact
-  C++ mirror of ProjectState, owned by the builder) into a new `PlaybackGraph`:
-  topologically ordered node list, pre-allocated buffers from `AudioBufferPool`,
-  PDC delays inserted, per-node prepared state.
-- Swap is an atomic pointer exchange the audio thread performs at a block boundary
-  (`GraphSwapLatch`). The retired graph is pushed to a garbage queue and destroyed
-  on the builder thread — **the audio thread never frees memory**.
-- **Node state migration:** every node carries a stable `NodeUid` derived from the
-  edit-model entity id. On swap, stateful DSP (filter states, delay lines, reverb
-  tails, voice states, stretcher state, envelope positions) is *adopted* from the
-  retired graph via `NodeStateRegistry` (uid → state block, move-only). This fixes
-  the classic rebuild artifact (Tracktion's "stateful buffers lost" problem):
-  reordering an EQ must not cut a reverb tail.
-- Rebuilds are debounced/coalesced; a rebuild in flight absorbs newer dirty marks.
+Per-producer-thread SPSC rings into RT; RT drains all rings every callback with
+per-ring drain caps:
 
-### 2.3 Thread inventory
+- **JNI ring** (Kotlin main/EngineSync producer): transport ops, structural
+  notices, param moves, UI note input.
+- **MIDI ring** (MIDI I/O thread producer): timestamped device events; MIDI-learn
+  mappings are resolved on the MIDI thread (map hit → param move or note event)
+  so learned CCs never round-trip through Kotlin.
+- **Builder ring** (GraphBuilder producer): swap offers, snapshot swap offers.
 
-| Thread | Priority | Role | Talks to |
-|---|---|---|---|
-| Oboe RT callback | RT (inherited MMAP/FIFO) | Pull commands, advance transport, run PlaybackGraph, write output, capture input taps | SPSC in: commands, MIDI-in, disk rings. SPSC out: meters, playhead, events |
-| Oboe input callback (or duplex pull) | RT | Deinterleave input → monitoring tap + record ring | Record ring → writer |
-| GraphBuilder | High-normal | EngineModel upkeep, graph compile, retired-graph destruction, state registry | Command staging in, graph swap out |
-| DiskStreamer | High-normal | Prefetch audio-clip rings ahead of playhead & scheduled launches; peak-file reads | SampleCache, rings |
-| RecordingWriter | Normal | Drain record rings → WAV with journaled headers (crash-safe) | Files, events out |
-| MIDI I/O | High-normal | AMidi read/write loops, timestamping, clock in/out | SPSC → RT; MidiDeviceService |
-| Worker pool | Low | Waveform/peak gen, transient & tempo analysis, offline render, freeze, noise-learn, pack install | Media, events |
-| Kotlin main | UI | Compose, state holders, ProjectStore | JNI bridge |
-| Kotlin IO coroutines | BG | Persistence, autosave journal, Room, packs | Files/DB |
+Two message species with different loss semantics:
 
-Rules on the RT threads: no allocation, no locks, no syscalls, no logging, no
-exceptions across the boundary, FTZ/DAZ armed (`ScopedNoDenormals`), bounded work
-per block. All cross-thread traffic is SPSC rings or atomics; nothing blocks RT.
+- **Param moves** are not queued — they land in the **ParamMoveTable**: a fixed
+  open-addressing table keyed by ParamId, latest-wins, plus a dirty list the RT
+  thread consumes. Coalescing by construction; overflow of the table (rare burst
+  beyond capacity 256/block) drops oldest *cosmetic* moves and counts it.
+- **Events** (note on/off, transport, panic, snapshot/graph offers) ride a
+  **lossless ring** sized for worst-case bursts (4096); producer-side high-water
+  → reject + `Panic` event → RT executes all-notes-off. A note-on without its
+  note-off is never silently possible: note events are enqueued as pairs of
+  guaranteed slots or refused atomically.
 
-### 2.4 State readback (engine → UI)
+**Ordering rule (editSeq):** every compiled graph/snapshot is stamped with the
+editSeq it was built from. RT applies incoming messages immediately; after a
+swap it re-applies the ParamMoveTable dirty set and any pending events with
+`seq > graph.seq`, and migrated `SmoothedValue` state (§2.3) carries current
+values across — a fader ridden during a rebuild never jumps.
 
-- `MeterBus`: per-track peak/RMS + gain-reduction + master true-peak/LUFS frames,
-  SPSC, UI polls at frame rate. Bypasses ProjectStore (too hot for state reducers).
-- `TransportClock`: atomic {samplePos, beat, bpm, playing, recording, loop} snapshot
-  each block; Kotlin exposes it as a Flow tick for playheads.
-- `EngineEventBus`: low-rate events (xrun count, CPU load, recorded-file grew,
-  take finalized, clip launched/quantize-pending, stuck-note panic, route change).
-  These *do* reach ProjectStore where they change project state (e.g. new take).
+### 2.3 Graph rebuild, swap & state adoption (the protocol)
 
-### 2.5 Timebase
+- `GraphBuilder` (background) owns `EngineModel` (compact C++ mirror of the edit
+  model, updated from StateCodec deltas on the builder thread only). On dirty:
+  compile a new `PlaybackGraph` — topological node schedule, buffers from
+  `AudioBufferPool`, PDC delays, param indices resolved from semantic keys
+  (§6) — plus a **MigrationPlan**: for each new node, `{newNode, oldNode|null,
+  op}` where `op = adopt` iff NodeUid matches **and** configHash matches (same
+  DSP topology-relevant config) **and** rate/maxBlock unchanged; else
+  `reset-with-fade` (short fade-in to mask the reset).
+- **Swap (RT side):** callback sees a pending offer, at block boundary walks the
+  MigrationPlan executing **pointer/POD moves only** (state blocks are
+  self-contained; O(nodes), bounded by D4 caps — no copies, no allocation),
+  installs the new graph, publishes **epoch ack** (release-store of the retired
+  graph's epoch).
+- **GC:** builder frees a retired graph only after observing its epoch ack.
+  The audio thread never frees memory.
+- **NodeState blocks** are POD or hold only refcounted `SampleHandle`s from
+  SampleCache — never raw pointers into graph-owned or cache-evictable memory.
+  Voice states, delay lines, reverb tails, stretcher states, envelope positions
+  and `SmoothedValue`s migrate; anything whose config changed resets-with-fade
+  (a delay-line length change cannot "adopt").
+- Rebuilds are debounced; a build in flight absorbs newer dirty marks; offers
+  are single-slot (a newer offer replaces an unclaimed older one, which is GC'd).
 
-`TempoMap` (tempo + time-signature change points) provides bidirectional
-beat↔sample conversion, owned by the realtime side, mirrored in Kotlin. All RT
-scheduling is in samples; all musical data is in double beats. Loop, launch
-quantization, groove, Link phase all resolve through TempoMap. Tempo automation
-edits rebuild the map (structure-shaped change).
+TimelineSnapshot swaps use the same offer/ack/epoch mechanics per clip slot.
+
+### 2.4 Thread inventory
+
+| Thread | Priority | Role |
+|---|---|---|
+| Oboe output callback | RT | Drain input ring, drain message rings, apply ParamMoveTable, advance transport, run graph, publish TimeAnchor + meters/clock |
+| GraphBuilder | High-normal | EngineModel upkeep, graph/snapshot compiles, MigrationPlans, epoch GC |
+| DiskStreamer | High-normal | Clip ring prefetch (playhead + armed quantized launches + stretcher pre-roll) |
+| RecordingWriter | Normal | Drain record rings → journaled WAV; storage-budget guard |
+| MIDI I/O | High-normal | AMidi read/write, monotonic timestamping, MIDI-learn resolution, clock in/out framing |
+| Worker pool | Low | Peaks, analysis, prewarm/proxy renders, offline render, freeze, pack install |
+| Kotlin main | UI | Compose, holders, ProjectStore |
+| Kotlin IO | BG | Persistence, autosave, Room, packs |
+
+RT rules: no allocation, locks, syscalls, logging, or exceptions; FTZ/DAZ armed;
+bounded work per block; variable `numFrames` sub-chunked to ≤ maxBlock.
+
+### 2.5 Time, timestamps & readback
+
+- **TimeAnchor**: each callback publishes `{framePosition, monotonicNanos}`
+  atomically (from Oboe stream timestamps). All cross-domain conversion —
+  MIDI-in event times, Link phase, recording placement — goes through it.
+- **TempoMap**: beat↔sample conversion (tempo + time-sig events). Simple tempo
+  events (set BPM, nudge, scene tempo at quantized launch) are **RT-applied via
+  command** into an RT-editable tail segment; complex map edits (tempo
+  automation curves, insert/delete events mid-song) are structure-shaped
+  rebuilds. Launch quantization always resolves against the map the RT thread
+  currently holds — a quantized scene launch with a tempo change is computed
+  RT-side, never against a stale async copy.
+- **TimebaseSource** abstraction inside TransportEngine from day one:
+  `Internal | AbletonLink | MidiClockSlave` (PLL chase for external clock in).
+  Tempo authority rule: when Link or clock-slave is active, tempo automation is
+  suspended (events reported to UI).
+- **Readback:** `MeterBus` (audio meters, SPSC, lossy), `MidiActivityBus`
+  (per-MIDI-effect in/out activity counters, lossy), `TransportClock` (atomic
+  snapshot per block), `EngineEventBus` **split into two classes**: lossy
+  telemetry (xruns, CPU, dropout counters) and **must-deliver events** (take
+  finalized, capture materialized, recording error, panic) which carry sequence
+  numbers backed by a pull-side reconciliation query — a UI stall can never
+  lose a take.
+- **CpuLoadMonitor** attributes cost per node (per-block cycle sampling of the
+  schedule) so "the expensive device" is nameable (spec P2 §15.4), feeding the
+  **DegradationGovernor** ladder: shrink voice budget → force Eco quality on
+  flagged devices → demote RT stretchers to proxies → prompt freeze. All
+  actuation is ordinary commands; audio never just stops.
 
 ---
 
-## 3. Signal flow per track type (spec Part 2 §3)
+## 3. Audio topology & fixed audio semantics
 
-Fixed per-block track pipeline (each stage a node or fused into TrackNode):
+### 3.1 Signal flow per track type (spec P2 §3)
 
-- **MIDI/instrument track:** MidiSourceMux(clip player | live input | step input)
-  → MidiEffectChain → InstrumentDevice → AudioEffectChain → TrackStrip(vol/pan/
-  mute/solo, sends pre|post) → routing (group|master). Processed-MIDI tap after
-  MidiEffectChain is recordable to another track (MidiTapBus).
-- **Audio track:** AudioSourceMux(clip player | live input w/ monitor mode) →
-  input gain → AudioEffectChain → TrackStrip → routing. Monitoring modes:
-  off / in / auto; record taps dry or post-chain (RecordTapPoint decision per
-  track, spec §3.2).
-- **Drum track:** MidiSourceMux → MidiEffectChain → DrumRackDevice (pad chains:
-  per-pad instrument + per-pad effects + per-pad strip with choke groups,
-  individual outs to mixer) → rack-level AudioEffectChain → TrackStrip.
-- **Return track:** SendCollector → AudioEffectChain → TrackStrip → master (or
-  permitted bus; feedback-cycle detection at edit time refuses illegal routes).
-- **Group track:** child sum → AudioEffectChain → TrackStrip → master/group.
-- **External instrument track:** MidiOutDevice(port/chan/PC/CC) → hardware →
-  AudioReturnIn(+latency offset) → AudioEffectChain → TrackStrip.
-- **Master:** mix bus → AudioEffectChain (mastering) → MasterStrip(volume, final
-  TP limiter option) → output + resample tap.
+- **MIDI/instrument:** MidiSourceMux(clip | live | step) → MidiEffectChain →
+  Instrument → AudioEffectChain → TrackStrip → routing. Post-chain MIDI tap
+  (`MidiTapBus`) recordable to other tracks.
+- **Audio:** AudioSourceMux(clip | live input via InputJitterRing, monitor
+  off/in/auto) → input gain → AudioEffectChain → TrackStrip → routing.
+  `RecordTapPoint` = dry input or post-chain print (per track).
+- **Drum:** MidiSourceMux → MidiEffectChain → DrumRackDevice (per-pad chains,
+  chokes, per-pad strips; pads feed parent, an individual out, or a mixer
+  track) → rack AudioEffectChain → TrackStrip.
+- **Return:** SendCollector → chain → strip → Main (cycle-checked). **Group:**
+  child sum → chain → strip. **External instrument:** MidiOut(port/chan/PC/CC)
+  → hardware → AudioReturnIn(+hardware latency offset) → chain → strip.
+- **Master:** mix bus → mastering chain → MasterStrip → OutputBusMatrix.
 
-Sidechain: any dynamics/filter device exposes a sidechain input fed by a
-`SidechainTap` on any track/group/return (pre/post fader), routed through the
-graph as an extra edge (PDC-compensated).
+### 3.2 Output buses, cue & preview
 
-**PDC:** every DeviceNode reports `latencySamples()`. Chain latency sums; the
-graph computes per-path latency to master and inserts `DelayCompNode`s on shorter
-parallel paths, including send/return and sidechain edges. Live-input monitoring
-paths bypass PDC (low-latency monitoring), flagged in UI. PDC recomputes only on
-rebuild.
+`OutputBusMatrix`: N logical stereo buses — **Main** and **Cue** at launch —
+mapped to device channels pairs on multichannel interfaces, or Cue folded into
+Main when hardware can't provide it (state visible to UI). Routable sources:
+MetronomeNode (cue|main|both), `PreviewPlayer` (browser audition — full decode-
+preview path, tempo-synced/key-shifted preview via its own stretcher instance,
+routed cue or main, live while the project plays), solo-to-cue mode, cue mix
+sends per track (pre/post). This exists from M2 — MasterNode and OboeDriver are
+designed against buses, not a single output.
+
+### 3.3 PDC & bypass contract
+
+- Devices report `latencySamples()`; PdcCalculator balances all parallel paths
+  (dry/wet inside devices, racks' chains, sends/returns, sidechain edges,
+  group joins) with DelayCompNodes; recomputed on rebuild.
+- **Bypass is a parameter, therefore it must be latency-preserving and
+  click-free**: bypassed device = dry delayed by its reported latency,
+  crossfaded ~10 ms. A device whose latency depends on a parameter (lookahead,
+  oversampling) either reports its worst-case constant latency or declares that
+  parameter structure-shaped. This is part of the DeviceNode contract (§10).
+- Live-input monitoring paths bypass PDC (low-latency monitoring), flagged.
+
+### 3.4 Fixed numeric conventions (all device/mixer authors bind to these)
+
+- Pan: constant-power sin/cos law, −3 dB center; stereo balance mode for
+  stereo sources.
+- Crossfader: equal-power curve; per-track assign A/B/none resolved in
+  TrackStrip against the global crossfader param.
+- Summing: float32 accumulation, no clamping anywhere before MasterStrip; the
+  master limiter/soft-clip is the only nonlinearity by default.
+- dB mapping: `gain = 10^(dB/20)`; fader taper defined once in ParamDescriptor
+  curves; −∞ below −72 dB.
+- Default fades: 10 ms equal-power micro-fades guard all clip edges/edits;
+  crossfades equal-power.
+- Solo semantics: solo-in-place; audibility matrix computed RT-side per block
+  from per-track flags; returns stay audible when fed only by soloed tracks;
+  soloing inside a group solos the path to master; exclusive-solo is a UI mode.
+
+### 3.5 Recording alignment (owner: `RecordingAligner`)
+
+Placement offset for recorded material =
+`capturePosition − (outputLatency + inputLatency + userCalibration)`; a
+post-FX RecordTapPoint additionally subtracts that chain's PDC at the tap.
+MIDI events convert monotonic→frames via TimeAnchor. OboeDriver supplies
+per-stream latency reports; loopback calibration (EnginePrefs) refines. The
+"take finalized" event carries the computed offset; comping alignment is
+therefore sample-exact by construction.
 
 ---
 
 ## 4. Module map
 
-One Gradle `:app` + one native `libdawcore.so`. Logical modules with one-way
-dependencies (→ = may depend on):
+One Gradle `:app` + `libdawcore.so`. Dependency direction:
 
 ```
 Kotlin  ui/* → state holders → domain (+services) → engine bridge → JNI
-        services → domain, data;  data → domain
 C++     jni → engine → {graph, sequencer, media, timestretch} → device → dsp → core
 ```
 
-### 4.1 C++ modules (`app/src/main/cpp/`)
+### 4.1 C++ modules (`app/src/main/cpp/`) — replaces the condemned skeleton
 
-| Module | Owns | Key classes |
-|---|---|---|
-| `core/` | RT primitives | LockFreeQueue (SPSC), RingBuffer, AtomicSnapshot, AudioBufferPool, SmoothedValue, ScopedNoDenormals, XorShift RNG, FixedVector/FixedString, RtAssert, EngineCommand, MeterFrame, NodeUid, ObjectHandle tables |
-| `dsp/` | Pure DSP, no engine deps | Oscillator (polyBLEP), WavetableSet+WavetableOscillator, NoiseGen, SvfFilter, LadderFilter, BiquadFilter(+design), CombFilter, AllpassFilter, AdsrEnvelope, AhdEnvelope, MultiStageEnvelope, Lfo (shapes, S&H), EnvelopeFollower, DelayLine (interp), FftProcessor (pffft wrap), WindowedOverlapAdd, PartitionedConvolver, Resampler (windowed-sinc), Waveshaper, Upsampler2x/Oversampler, PitchDetectorYin, TransientDetector (spectral flux), GrainPlayer, FdnReverbCore, PsolaShifter, FormantShifter (WORLD-informed), DitherTpdf, LoudnessEbuR128, TruePeakDetector, CorrelationMeter, DcBlocker, StereoWidthProcessor |
-| `device/` | Device platform | DeviceNode (abstract: prepare/process/reset/latency/params/save-state), InstrumentNode, EffectNode, MidiEffectNode, DeviceChain, ParamDescriptor+ParamRegistry, VoiceAllocator (poly/mono/legato/glide/steal), Voice base, MpeNoteState, ModMatrix (per-device), SidechainInput |
-| `device/instruments/` | Spec §5 | SubtractiveSynth, WavetableSynth, FmSynth, MacroSynth (dual-engine morph), SimpleSampler (pitch/one-shot/slice), MultiSampler (zones/RR/vel layers), DrumPadSampler, DrumRackDevice, MalletModel, StringModel, EPianoModel, SampleLibraryPlayer (SFZ-subset import), ExternalInstrumentDevice |
-| `device/effects/` | Spec §10 | Utility, SpectrumAnalyzerNode, TunerNode, LoudnessMeterNode, ChannelEq, ParametricEq8, PerformanceEq3, AutoFilter, Compressor, BusCompressor, GateExpander, Limiter (lookahead+TP), DeEsser, MultibandDynamics (3-band Linkwitz-Riley), TransientShaper, Saturator, MultistageDistortion, PedalDrive, AmpSim, CabSim, Bitcrusher, StereoDelay, EchoDevice (ducking, diffusion), FilterDelay3, GrainDelay, AlgorithmicReverb (FDN), HybridReverb (conv+algo), ChorusEnsemble, PhaserFlanger, AutoPanTremolo, PitchCorrector (YIN+PSOLA, scale-aware, MIDI-guided), PitchFreqShifter, Vocoder, ResonatorBank, SpectralProcessor (freeze/smear/shift), BeatRepeat, LooperDevice, NoiseReducer (offline+preview), DeClicker (offline) |
-| `device/midi_effects/` | Spec §8.3 | RtArpeggiator, RtChord, RtNoteLength, RtPitch, RtRandom, RtScale, RtVelocity, RtCcControl, RtNoteEcho, RtExpressionControl, RtMidiLfo — all through MidiEffectNode with ActiveNoteRegistry (stuck-note prevention on bypass/reorder/stop) |
-| `device/racks/` | Spec §11 | RackDevice (Instrument/Audio/MidiEffect variants), RackChain (zones: key/velocity/selector/**frequency band** — Linkwitz-Riley crossover split for multiband racks, Part 1 §13; crossfaded overlaps), MacroTable (mappings min/max/curve/polarity), VariationStore (macro snapshots, morph), ChainMixer |
-| `graph/` | Mix topology | AudioGraph (node schedule), TrackNode, GroupTrackNode, ReturnTrackNode, MasterNode, TrackStrip (gain/pan laws, mute/solo matrix, **crossfader A/B assign** resolved against the global crossfader param — performance crossfading, Part 1 §18), SendNode/SendCollector, SidechainTap, RoutingTable (validated, cycle-free), DelayCompNode, PdcCalculator, MeterProbe, GraphBuilder, GraphSwapLatch, NodeStateRegistry, AudioGraphGc |
-| `sequencer/` | Time & playback | TransportEngine, TempoMap, TimelineSnapshot (arr clips, session slots, notes, automation, warp refs — RT-readable), ArrangementPlayer, SessionPlayer (launch modes, legato, quantization), TrackPlaybackArbiter (per-track Session-overrides-Arrangement, return-to-arrangement; spec §1.1), FollowActionScheduler, LaunchQuantizer, MidiClipPlayer (notes+MPE+prob/deviation), AudioClipPlayer (warped/repitch, gain, fades), StepSequencerCore (ratchets, microtiming, per-step automation locks), GrooveEngine (templates, extract, amount), MidiScheduler (sample-offset event lists), MetronomeNode, PunchController, CaptureBuffer (retrospective MIDI capture ring), ArrangementRecorder (session-performance capture: launches, scene changes, mixer/param automation → edit ops), AutomationEvaluator, ClipEnvelopeEvaluator, ModulationEngine (LFO/follower/step/random/note sources), ParameterResolver (see §6) |
-| `media/` | Files & samples | AudioFileDecoder (dr_wav/dr_flac/dr_mp3 + MediaCodec AAC), AudioFileWriter (WAV; FLAC via libFLAC; AAC/MP3 via MediaCodec), SampleCache (LRU, resident vs streamed), DiskStreamRing, PrefetchPlanner (playhead + armed launches), RecordingWriter (journaled WAV, recovery scan), PeakFileBuilder (multi-res waveform), AnalysisService (transient grid, tempo/key guess, pitch detect), SliceEngine (transient/beat/equal → slices) |
-| `timestretch/` | Warp | WarpEngine (signalsmith-stretch adapter, per-clip instances), WarpMap (marker sample↔beat, linear segments), RepitchPlayhead, StretchPrewarmer (background large-ratio pre-render, Tracktion-style) |
-| `engine/` | Facade | AudioEngine (owns everything, lifecycle), OboeDriver (out+in streams, route/rate change recovery, xrun counters), EngineCommandRouter, EngineModel (C++ mirror of edit state for builder), OfflineRenderEngine (faster-than-RT, tails, stems solo/mute matrix, quality mode), FreezeEngine, ResampleTap (track/group/return/master), CpuLoadMonitor, PanicController (all-notes-off, engine reset) |
-| `jni/` | Boundary | NativeAudioBridge (JNI_OnLoad, method table), CommandCodec (flat binary command encoding), StateCodec (TimelineSnapshot/EngineModel deltas from Kotlin), CallbackDispatcher (event bus → JVM via pre-registered method ids, never from RT thread) |
+| Module | Key classes (responsibility) |
+|---|---|
+| `core/` | SpscRing, ParamMoveTable, EventRing (paired-slot note safety), AtomicSnapshot, EpochGc, AudioBufferPool, SmoothedValue, ScopedNoDenormals, FixedVector/FixedFunction, NodeUid, ConfigHash, TimeAnchor, EngineCommand (§10 layout), MeterFrame, RtRandom (seedable) |
+| `dsp/` | Oscillator (polyBLEP), WavetableSet/Oscillator, NoiseGen, SvfFilter, LadderFilter, BiquadFilter+design, Comb/Allpass, AdsrEnvelope, AhdEnvelope, MultiStageEnvelope, Lfo, EnvelopeFollower, DelayLine, FftProcessor (pffft), WindowedOverlapAdd, PartitionedConvolver, Resampler, Waveshaper, Oversampler, PitchDetectorYin, TransientDetector, GrainPlayer, FdnReverbCore, PsolaShifter, FormantShifter, DitherTpdf, LoudnessEbuR128, TruePeakDetector, CorrelationMeter, DcBlocker, StereoWidthProcessor — all host-compilable, no Android deps |
+| `device/` | DeviceNode (contract §10), InstrumentNode, EffectNode, MidiEffectNode, DeviceChain, ParamDescriptor/ParamRegistry (semantic keys §6), VoiceAllocator (accepts external steal demands), Voice, MpeNoteState, ModMatrix, SidechainInput, QualityMode |
+| `device/instruments/` | SubtractiveSynth, WavetableSynth, FmSynth, MacroSynth, SimpleSampler, MultiSampler (SFZ-subset import), DrumPadSampler (synthesis modes: sub/noise/FM/ring/bit — the "drum synth" family), DrumRackDevice, MalletModel, StringModel, EPianoModel, SampleLibraryPlayer, ExternalInstrumentDevice |
+| `device/effects/` | Utility, SpectrumAnalyzerNode, TunerNode, LoudnessMeterNode, ChannelEq, ParametricEq8 (LR/MS), PerformanceEq3, AutoFilter, Compressor, BusCompressor, GateExpander, Limiter (lookahead/TP; constant reported latency), DeEsser, MultibandDynamics, TransientShaper, Saturator, MultistageDistortion, PedalDrive, AmpSim, CabSim, Bitcrusher, StereoDelay, EchoDevice, FilterDelay3, GrainDelay, AlgorithmicReverb, HybridReverb, ChorusEnsemble, PhaserFlanger, AutoPanTremolo, PitchCorrector (YIN+PSOLA, scale/MIDI-guided), PitchFreqShifter, Vocoder, ResonatorBank, SpectralProcessor, BeatRepeat, LooperDevice (can set project tempo from loop), NoiseReducer (offline), DeClicker (offline) |
+| `device/midi_effects/` | RtArpeggiator, RtChord, RtNoteLength, RtPitch, RtRandom, RtScale, RtVelocity, RtCcControl, RtNoteEcho, RtExpressionControl, RtMidiLfo — MidiEffectNode base with ActiveNoteRegistry (bypass/reorder/stop safe) + MidiActivityBus taps |
+| `device/racks/` | RackDevice (Instr/Audio/MidiFx), RackChain (zones: key/velocity/selector/**frequency band** via LR crossovers; crossfaded), MacroTable, VariationStore (snapshots, morph), ChainMixer |
+| `graph/` | AudioGraph (compiled schedule), TrackNode/GroupTrackNode/ReturnTrackNode/MasterNode, TrackStrip (conventions §3.4, crossfader assign, cue sends), SendNode/SendCollector, SidechainTap, RoutingTable (cycle-refusing), DelayCompNode, PdcCalculator, OutputBusMatrix, MeterProbe, GraphBuilder, MigrationPlan, NodeStateRegistry, EpochGc use, VoiceBudgetLedger |
+| `sequencer/` | TransportEngine (TimebaseSource: internal/Link/clock-slave), TempoMap (RT tail edits + offline rebuilds), TimelineSnapshot (per-clip, epoch-swapped; bounded scene window), ArrangementPlayer, SessionPlayer (launch modes/legato/quant), **SessionRecorder** (record into slots: quantized start/stop, auto-loop on stop, overdub/replace), TrackPlaybackArbiter, FollowActionScheduler, LaunchQuantizer, MidiClipPlayer (sounding-note table, comp-region lists, MPE, probability/deviation with **seeded RtRandom: deterministic per clip+position for render parity**), AudioClipPlayer (region lists, warp/repitch, groove micro-offsets applied to beat→sample mapping, ring-underrun → silence+event), StepSequencerCore, GrooveEngine, MidiScheduler, MetronomeNode (bus-routable), PunchController, CaptureBuffer, ArrangementRecorder, AutomationEvaluator (active-lane iteration only), ClipEnvelopeEvaluator, ModulationEngine, ParameterResolver |
+| `media/` | AudioFileDecoder (dr_wav/flac/mp3 decode + MediaCodec AAC), AudioFileWriter (WAV, FLAC, AAC), SampleCache (budgeted, `(fileId, rate)` keys, refcounted SampleHandles), DiskStreamRing, PrefetchPlanner, RecordingWriter (journaled, storage guard), PeakFileBuilder, AnalysisService (transients/tempo/key/pitch), SliceEngine, **SampleCaptureService** (record-into-pad/sampler flow off ResampleTap or input, distinct from track recording), **MediaGc** (reachability = undo stack ∪ versions ∪ takes ∪ journal; only unreachable files deleted) |
+| `timestretch/` | WarpEngine (budgeted stretcher pool), WarpMap, RepitchPlayhead, StretchPrewarmer (proxies keyed `(tempoMapRev, warpMapRev, rate)`, invalidated on either edit; pre-roll on seek/armed launches via PrefetchPlanner) |
+| `engine/` | AudioEngine, OboeDriver (output-driven duplex per D2, per-stream latency reports, route/rate-change re-prepare sequence per D5), SyncAdapter (Link RT capture/commit; MIDI clock in/out), EngineModel, OfflineRenderEngine (deterministic seeds; tails; stems matrix; **realtime-capture mode for ExternalInstrumentDevice tracks**), FreezeEngine, ResampleTap, CpuLoadMonitor (per-node attribution), DegradationGovernor, PanicController |
+| `jni/` | NativeAudioBridge, CommandCodec + StateCodec (versioned wire formats §10), CallbackDispatcher (never from RT) |
 
 ### 4.2 Kotlin modules (`app/src/main/java/com/example/`)
 
-| Module | Owns | Key classes |
-|---|---|---|
-| `domain/model/` | Edit model v2 (immutable, `kotlinx.collections.immutable`) | Project, TrackModel hierarchy (Audio/Midi/Drum/Group/Return/Master/External/Resampling roles as TrackKind + capabilities), ClipInstance (arr/session variants: position vs slot, launch mode/quant/follow, fades), ClipContent (MidiContent: notes+expression lanes+drumSteps; AudioContent: fileRef, warpMap, gain, pitch, slices) with contentId sharing + copy-on-unlink (spec §1.2 linked/unlinked property split), Scene (tempo/timeSig, follow), NoteModel (+MPE fields, probability, deviations), AutomationLane (points, curves, shapes, simplify/thin-out op, musical-time lock flag), ClipEnvelope, ModulationAssignment, DeviceModel tree (params, racks: chains/zones/macros/variations), TakeLane/Take/CompRegion, GrooveTemplate, RoutingModel (io/sends/sidechains), ScaleContext (project + per-clip), MarkerModel, TempoEvent/TimeSigEvent |
-| `domain/store/` | UDF | ProjectStore (reducers per action family), ProjectAction (sealed families: Transport/Track/Clip/Note/Device/Rack/Automation/Modulation/Routing/Take/Scene/Groove/Project), UndoManager (gesture-scoped transactions, coalescing, bounded history), SelectionModel (track/clip/note/device/time — survives context switches, spec §15.1) |
-| `engine/` | Bridge & sync | EngineController (lifecycle, foreground service + audio focus/route handling), EngineSync (ProjectState diff → commands or model-push + rebuild triggers), EngineReadback (meters/clock/events → flows), CommandEncoder (Kotlin side of codec), EnginePrefs (buffer size, latency calibration) |
-| `data/` | Persistence & library | ProjectRepositoryV2 (project folder: project.json + media/ + peaks/ + takes/), ProjectSerializer (kotlinx.serialization, versioned migrations), AutosaveJournal (debounced ops log + snapshot), VersionStore (named versions/snapshots), CrashRecovery (journal replay + recording scan), DawDatabase/Room (project index, MediaLibrary index: samples/presets/kits/grooves, tags, favorites, recents), PackManager (download, verify, storage budget), MissingFileResolver, ProjectArchiver (portable bundle) |
-| `services/` | App services | ExportService (mix/stems/tracks/loop/MIDI; format+dither+normalize+tails options), MidiDeviceService (USB/BLE discovery, input routing, clock/MTC out, MidiLearnMap), AudioDeviceService (interface/in-out selection, route-change policy), SyncService (Ableton Link adapter — D8, MIDI clock), ImportService (audio/MIDI/project import, sample collect), RenderJobQueue (freeze/bounce/noise-learn jobs → worker pool) |
-| `ui/state/` | Per-surface holders | Existing 8 + ClipEditorStateHolder (piano roll deep: fold/scale/expression lanes/multi-clip), AudioEditorStateHolder (trim/warp/slice/fades), DeviceDetailStateHolder (per-device panels, A/B, presets), AutomationStateHolder (lane edit, modes: read/write/touch/latch, override), TakeCompStateHolder, PerformanceStateHolder (macros, xfader, momentary FX, lock), InputSurfaceStateHolder (keyboard/pads/chord/step modes, scale lock, MPE), BrowserStateHolder v2 (search/filter/preview-in-key/tempo), SettingsStateHolder (audio/MIDI/sync/storage), ProjectHubStateHolder (projects, versions, recovery) |
-| `ui/screens/earth/` | Screens | Existing 8 + ClipEditorScreen, AudioEditorScreen, DeviceDetailScreen, TakeLanesScreen, PerformanceScreen, InputSurfaceScreen (overlay), SettingsScreen, ProjectHubScreen — all Earth.Design V2 morphic glass |
-| `ui/components/earth/` | Reusable | Existing + WaveformView (peak-file backed), PianoRollGrid, StepGrid, AutomationLaneView, EnvelopeEditor, XYMorphPad, MacroKnobRow, TakeLaneRow, SpectrumView, LoudnessMeterView, KeyboardView/PadGridView/ChordPadView, ValueSlider (coarse/fine/numeric per spec §15.2) |
+| Module | Key classes |
+|---|---|
+| `domain/model/` | Project, TrackModel (kinds/capabilities incl. resampling role), ClipInstance (arr/session), ClipContent (Midi/Audio; contentId sharing, copy-on-unlink per P2 §1.2 property split), Scene, NoteModel (MPE, probability, deviations), AutomationLane (points/curves/shapes/simplify, musical-time lock), ClipEnvelope, ModulationAssignment, DeviceModel tree (racks/zones/macros/variations; **semantic param keys only — never indices**), TakeLane/Take/CompRegion (audio + MIDI), GrooveTemplate, RoutingModel, ScaleContext, MarkerModel, TempoEvent/TimeSigEvent |
+| `domain/store/` | ProjectStore (+editSeq stamping), ProjectAction families, UndoManager (gesture transactions, coalescing, bounded), SelectionModel (survives context switches) |
+| `domain/midi/` | MidiTransformOps (15 transformations), MidiGeneratorOps (7 generators), StepEditOps (fill N/rotate/randomize) — pure functions, preview-commit contract |
+| `engine/` | EngineController (lifecycle, foreground service, focus/route policy, interruption finalize-recording), EngineSync (diff → messages/deltas + change classification), EngineReadback (buses → flows; must-deliver reconciliation), CommandEncoder, EnginePrefs (buffer size, calibration) |
+| `data/` | ProjectRepositoryV2 (project dir: project.json + media/ + peaks/ + takes/), ProjectSerializer (versioned migrations), AutosaveJournal (**ops log versioned by schema; on mismatch recover from snapshot, discard tail**), VersionStore, CrashRecovery (journal replay + recording scan), DawDatabase/Room (project + MediaLibrary index incl. **MIDI patterns**, tags, favorites, recents), PackManager, MissingFileResolver, ProjectArchiver, ImportService |
+| `services/` | ExportService (mix/stems/tracks/groups/loop/MIDI; WAV/FLAC/AAC; dither; normalize; tails; loudness targets), MidiDeviceService (USB/BLE; **MidiLearnMap targets: params, macros, mixer, clip/scene launch, transport**), AudioDeviceService (device/bus mapping, cue availability), SyncService (thin UI over SyncAdapter), RenderJobQueue |
+| `ui/state/` | Existing 8 + ClipEditorStateHolder, AudioEditorStateHolder, DeviceDetailStateHolder (A/B, presets), AutomationStateHolder (read/write/touch/latch, override/return), TakeCompStateHolder, PerformanceStateHolder (macros, crossfader, momentary FX, edit lock), InputSurfaceStateHolder (keyboard/pads/chords/fretboard/step, scale lock, MPE, note repeat), BrowserStateHolder v2 (preview via PreviewPlayer), SettingsStateHolder, ProjectHubStateHolder |
+| `ui/screens/earth/` + `ui/components/earth/` | Existing + ClipEditorScreen, AudioEditorScreen, DeviceDetailScreen, TakeLanesScreen, PerformanceScreen, InputSurfaceScreen, SettingsScreen, ProjectHubScreen; components: WaveformView, PianoRollGrid, StepGrid, AutomationLaneView, EnvelopeEditor, XYMorphPad, MacroKnobRow, TakeLaneRow, SpectrumView, LoudnessMeterView, Keyboard/PadGrid/ChordPad views, ValueSlider (coarse/fine/numeric/reset) — Earth.Design V2 morphic glass |
 
 ---
 
-## 5. Parameter system (spec §11.3, §12, Part1 §17)
+## 5. Parameter system
 
-- Every automatable value is a `ParamId` = (NodeUid, paramIndex) with a static
-  `ParamDescriptor` (range, curve, default, unit, smoothing-ms, rt-safe flag,
-  randomize-excluded flag).
-- Per-block resolution order (ParameterResolver):
-  `base (edit model) → track automation (AutomationEvaluator) → clip envelopes
-  (ClipEnvelopeEvaluator) → modulation offsets (ModulationEngine, additive
-  bipolar/unipolar, never rewrites) → macro contributions (MacroTable) →
-  SmoothedValue → DSP`.
-- Automation override: touching a param sets override until "return to automation"
-  (per-param latch state in TransportEngine).
-- Automation recording modes read/write/touch/latch implemented in Kotlin
-  (AutomationStateHolder + ArrangementRecorder events), engine only reports
-  touched params with timestamps.
-- Macro mapping/randomization/variation-morph resolve to plain param moves so
-  recording macro movement as automation is free (spec §11.3).
+Resolution per block: `base → track automation → clip envelopes → modulation
+(additive bipolar/unipolar offsets) → macro contributions → SmoothedValue →
+DSP`. Only *active* lanes/assignments are iterated. Automation touch/override/
+return latching per param. Recording modes read/write/touch/latch implemented
+Kotlin-side from engine touch reports. Macro moves are plain param moves, so
+recording them as automation is free.
 
-## 6. Linked clips & content model (spec Part 2 §1.2)
+## 6. Stable parameter identity (replaces `(NodeUid, paramIndex)`)
 
-- `ClipContent` is the shared entity (contentId). Session and Arrangement
-  `ClipInstance`s reference it. Shared: notes/expression, audio ref, warp
-  markers, loop content, clip envelopes, clip gain/pitch. Per-instance: position
-  or slot, launch mode/quantization, follow actions, arrangement fades,
-  per-instance overrides explicitly listed — nothing else.
-- Unlink = deep-copy content with new contentId (copy-on-unlink; never duplicates
-  audio files). ArrangementRecorder creates linked instances (spec §13.2).
-- Consolidate/render creates new AudioContent + file (explicit destructive ops
-  only, originals kept per spec).
+- Persisted identity = **semantic param key**: per-device-type stable string id
+  (hashed) declared in ParamDescriptor. AutomationLane, ClipEnvelope,
+  ModulationAssignment, MacroTable, MidiLearnMap all reference keys.
+- GraphBuilder resolves keys → dense indices at compile time; indices exist
+  only inside a compiled graph (ParamMoveTable ships resolved indices; the
+  resolver table travels with the graph).
+- Device replacement uses a declared **remap table** (per device-type pair) so
+  compatible automation/mappings survive replace (P2 §4, §11.1); unmapped
+  lanes are kept, flagged orphaned, never silently deleted.
 
-## 7. Recording, takes, comping (spec Part 2 §14, Part 1 §6)
+## 7. Media, warp & memory reality
 
-- RT input path: input callback → monitoring tap (per-track monitor mode) +
-  `RecordRing` → RecordingWriter (journaled WAV: header fixed up on close;
-  recovery scan finalizes orphans on next launch).
-- Loop recording → Take per pass (audio: file regions; MIDI: note buffers).
-  `TakeLane`/`CompRegion` live in the edit model; comp audio playback = region
-  list with crossfades (AudioClipPlayer supports region-list sources).
-- Retrospective MIDI capture: `CaptureBuffer` ring always records armed-track
-  input; "Capture" materializes it as a clip with inferred tempo/grid.
-- Punch in/out via PunchController; count-in via MetronomeNode; recording
-  quantization applied as a non-destructive first edit (undoable).
+### 7.1 Memory budget table (constructor-injected, tuned per RAM class)
 
-## 8. Feature coverage matrix
+| Cache | 3 GB device | 6 GB | 8 GB+ |
+|---|---|---|---|
+| SampleCache resident | 256 MB | 512 MB | 768 MB |
+| Stream rings | 24 × 2 s stereo (~8 MB) | 32 × 2 s | 48 × 2 s |
+| Prewarm/proxy cache (disk-backed, RAM window) | 64 MB | 128 MB | 192 MB |
+| Peak-file cache | 32 MB | 64 MB | 96 MB |
 
-### 8.1 SPEC_PART1_FUNCTIONAL (22 areas)
+Ring seconds derive from max stretch ratio × prefetch horizon; numbers are
+parameters, not constants.
 
-| Area | Owning modules / classes |
+### 7.2 Streaming & recording
+
+RT reads only prefilled rings (underrun → silence + event). RecordingWriter
+journals headers (crash-recoverable), refuses to start under a storage floor
+and warns approaching it. Auto-naming by track/take/timestamp.
+
+### 7.3 Sample-rate change (D5 sequence)
+
+Pause-safe re-prepare: drain → close streams → reopen at new rate → re-key
+caches → re-prime rings → resume; recordings/imports conform via per-clip
+resamplers until background re-conform jobs complete. UX state exposed.
+
+### 7.4 Warp budget
+
+N concurrent RT stretchers by device class (baseline 8 stereo mid-range,
+measured in M7); beyond N: prewarmed proxy or repitch fallback with UI flag.
+Proxies invalidate on tempo-map or warp-map revision change.
+
+## 8. Linked clips, takes, capture
+
+- `ClipContent` shared by contentId; instances carry position/slot, launch
+  mode/quant, follow actions, arrangement fades, per-instance overrides —
+  exactly the P2 §1.2 split. Unlink = copy-on-unlink (never duplicates audio
+  files). Consolidate/render = explicit new content + file.
+- Take lanes for audio **and MIDI** (comp regions; MidiClipPlayer plays MIDI
+  comp region lists like AudioClipPlayer does audio).
+- SessionRecorder owns slot recording (quantized start/stop, auto-loop,
+  overdub/replace); ArrangementRecorder owns session-performance capture
+  (launches, scene changes, mixer/param automation, tempo events → linked
+  instances + automation); CaptureBuffer owns retrospective MIDI.
+
+## 9. Feature coverage matrix
+
+### 9.1 SPEC_PART1_FUNCTIONAL (22 areas)
+
+| Area | Owners |
 |---|---|
-| 1 Project system | data/: ProjectRepositoryV2, ProjectSerializer, VersionStore, AutosaveJournal, CrashRecovery, ProjectArchiver, MissingFileResolver, ImportService; ProjectHubStateHolder/Screen |
-| 2 Transport & song controls | sequencer/TransportEngine, TempoMap, MetronomeNode, PunchController, LaunchQuantizer (global quant), MarkerModel; TransportStateHolder, EarthTransportBar; tap tempo in TransportStateHolder |
-| 3 Arrangement View | ArrangementPlayer, TimelineSnapshot, ArrangementRecorder; domain clip ops (split/join/ripple/insert-remove time reducers); ArrangementStateHolder/ArrangerScreen, AutomationLaneView, TakeLaneRow; FreezeEngine |
-| 4 Session View | SessionPlayer, TrackPlaybackArbiter, FollowActionScheduler, LaunchQuantizer, Scene model; SessionStateHolder/SessionViewScreen; linked move/copy via ClipContent |
-| 5 Track system | TrackModel hierarchy + reducers; graph/TrackNode family, TrackStrip, RoutingTable; MixerStateHolder; track presets via data/ presets |
-| 6 Audio recording | OboeDriver input, RecordRing, RecordingWriter, monitoring modes, latency calibration (EnginePrefs), TakeLane/comping, CrashRecovery |
-| 7 MIDI recording & editing | MidiClipPlayer, MidiScheduler, CaptureBuffer, StepSequencerCore; NoteModel+expression; ClipEditorStateHolder/Screen, PianoRollGrid; MIDI file I/O in ImportService/ExportService; MidiLearnMap |
-| 8 Audio clip editor | AudioContent ops (trim/split/reverse/normalize/gain/fades/silence), TransientDetector, WarpEngine+WarpMap, SliceEngine, consolidate/render via OfflineRenderEngine; AudioEditorStateHolder/Screen, WaveformView |
-| 9 Drum Rack | DrumRackDevice, DrumPadSampler, choke groups, pad routing; StepSequencerCore (velocity/prob/ratchet/microtiming/step automation); SamplerDrumLabScreen + StepGrid; kit save via presets |
-| 10 Sampler | SimpleSampler, MultiSampler, SliceEngine, pitch detect (AnalysisService), loop crossfades, time-stretch; DeviceDetailScreen panels |
-| 11 Instruments | device/instruments/* (13 devices, §4.1); common behavior via DeviceNode+VoiceAllocator+ModMatrix+MacroTable (spec Part2 §4 checklist). The "drum synthesizer" family is served by DrumPadSampler's synthesis playback modes (sub, noise, FM, ring-mod, bit-reduce — Part 2 §5.7); LooperDevice can set project tempo from a recorded loop (Part 2 §10.10) |
-| 12 Browser & library | MediaLibrary (Room), PackManager, preview (in-key/tempo-synced via WarpEngine preview path), favorites/recents, MissingFileResolver; BrowserStateHolder v2/SoundBrowserScreen |
-| 13 Device chain & racks | DeviceChain, RackDevice family, MacroTable, VariationStore; DeviceRackStateHolder, DeviceDetailStateHolder; copy/save presets; freeze/render via RenderJobQueue |
-| 14 Mixer | TrackStrip, SendNode, groups, RoutingTable, SidechainTap, cue bus (AudioDeviceService outputs), MeterProbe/MeterBus, track delay (per-track offset in strip), phase invert, mono check (Utility on master); MixerStateHolder/MixerScreen |
-| 15 Effects | device/effects/* full catalog (§4.1) |
-| 16 Routing | RoutingTable (validated graphs, cycle refusal), MidiTapBus, ResampleTap, sidechains, pad routing, cue mix; routing UI in MixerScreen detail |
-| 17 Automation & modulation | AutomationLane/Evaluator, ClipEnvelope/Evaluator, ModulationEngine + ModulationAssignment, macro mapping, MIDI-learn to params; AutomationStateHolder, EnvelopeEditor |
-| 18 Performance | SessionPlayer + scenes, PerformanceStateHolder/Screen (clip pads, macro knobs, xfader groups, momentary FX via VariationStore, edit lock), CaptureBuffer, SyncService (Link/MIDI clock) |
-| 19 Mixing & mastering | Mastering chain on MasterNode (ParametricEq8, BusCompressor, Saturator, StereoWidth, Limiter TP), LoudnessMeterNode/LoudnessEbuR128, SpectrumAnalyzerNode, reference compare (A/B source in MasteringSuiteScreen via AudioClipPlayer), streaming loudness targets + DitherTpdf in ExportService |
-| 20 Export & sharing | OfflineRenderEngine + ExportService (mix/stems/tracks/groups/loop/MIDI, WAV/FLAC/AAC/MP3, SR/bit-depth, normalize, tails, master on/off), ProjectArchiver, SAF/share intents |
-| 21 Hardware & connectivity | OboeDriver (USB interfaces, multi-I/O where supported), MidiDeviceService (USB/BLE, clock in/out), SyncService (Link), sustain/expression via MIDI mapping, AudioDeviceService (routes, cue), background audio via foreground service (EngineController) |
-| 22 Reliability | AutosaveJournal, CrashRecovery, RecordingWriter journaling, UndoManager, VersionStore, MissingFileResolver, storage/CPU warnings (CpuLoadMonitor + EngineEventBus), offline-first (no network deps in core) |
+| 1 Project system | ProjectRepositoryV2, ProjectSerializer, VersionStore, AutosaveJournal, CrashRecovery, ProjectArchiver, MissingFileResolver, ImportService, MediaGc; ProjectHub UI |
+| 2 Transport & song controls | TransportEngine (+TimebaseSource), TempoMap, MetronomeNode (bus-routable), PunchController, LaunchQuantizer, MarkerModel, tap tempo (TransportStateHolder); status via CpuLoadMonitor + EngineEventBus |
+| 3 Arrangement View | ArrangementPlayer, TimelineSnapshot, ArrangementRecorder; clip reducers (split/join/ripple/insert-remove time); ArrangerScreen, AutomationLaneView, TakeLaneRow; FreezeEngine |
+| 4 Session View | SessionPlayer, **SessionRecorder**, TrackPlaybackArbiter, FollowActionScheduler, LaunchQuantizer, Scene; linked move/copy via ClipContent; SessionViewScreen |
+| 5 Track system | TrackModel kinds + reducers; TrackNode family, TrackStrip, RoutingTable; MixerStateHolder; presets |
+| 6 Audio recording | OboeDriver duplex, InputJitterRing, RecordRing, RecordingWriter, **RecordingAligner**, monitor modes, latency calibration, take lanes/comping, CrashRecovery |
+| 7 MIDI recording & editing | MidiClipPlayer, MidiScheduler, CaptureBuffer, StepSequencerCore, NoteModel; ClipEditorScreen; MIDI file I/O (Import/ExportService); MidiLearnMap |
+| 8 Audio clip editor | AudioContent ops, TransientDetector, WarpEngine/WarpMap, SliceEngine, consolidate via OfflineRenderEngine; AudioEditorScreen, WaveformView |
+| 9 Drum Rack | DrumRackDevice, DrumPadSampler, chokes, pad routing, **SampleCaptureService** (record into pads); StepSequencerCore + StepEditOps; kit presets |
+| 10 Sampler | SimpleSampler, MultiSampler, SliceEngine, AnalysisService pitch detect, SampleCaptureService; DeviceDetailScreen |
+| 11 Instruments | device/instruments/* (13); common behavior via DeviceNode contract + VoiceAllocator + VoiceBudgetLedger + ModMatrix + MacroTable + QualityMode |
+| 12 Browser & library | MediaLibrary (samples/presets/kits/grooves/**MIDI patterns**), PackManager, **PreviewPlayer** (audition while playing, tempo/key preview), favorites/recents, MissingFileResolver; SoundBrowserScreen |
+| 13 Device chain & racks | DeviceChain (+replace-with-remap §6), RackDevice (freq/key/vel/selector zones), MacroTable, VariationStore; freeze/render via RenderJobQueue |
+| 14 Mixer | TrackStrip, sends, groups, RoutingTable, SidechainTap, **OutputBusMatrix cue mix**, MeterProbe/MeterBus, track delay offset, phase invert, mono check, channel presets; MixerScreen |
+| 15 Effects | device/effects/* catalog |
+| 16 Routing | RoutingTable, MidiTapBus, ResampleTap, sidechains, pad routing, cue/monitor mixes, feedback refusal, templates(=projects) |
+| 17 Automation & modulation | AutomationLane/Evaluator, ClipEnvelope/Evaluator, ModulationEngine/Assignment, macros, MIDI learn→params |
+| 18 Performance | SessionPlayer/scenes, PerformanceScreen (clip pads via **MidiLearnMap clip/scene targets**, macro knobs, **crossfader**, momentary FX via VariationStore, edit lock), CaptureBuffer, SyncAdapter (Link/clock) |
+| 19 Mixing & mastering | Mastering chain on MasterNode, LoudnessMeterNode/EbuR128/TruePeak, SpectrumAnalyzerNode, **reference A/B: pre-master-chain tap + loudness-matched compare** in MasteringSuiteScreen, streaming loudness targets + DitherTpdf in ExportService |
+| 20 Export & sharing | OfflineRenderEngine + ExportService (WAV/FLAC/AAC per D5), ProjectArchiver, SAF/share |
+| 21 Hardware & connectivity | OboeDriver (USB, multi-I/O buses), MidiDeviceService (USB/BLE, **clock in via TimebaseSource** + clock out), SyncAdapter (Link), sustain/expression mapping, AudioDeviceService, background audio (foreground service) |
+| 22 Reliability | AutosaveJournal (versioned), CrashRecovery, RecordingWriter journal + storage guard, UndoManager, VersionStore, MissingFileResolver, CPU/thermal via CpuLoadMonitor + DegradationGovernor, offline-first |
 
-### 8.2 SPEC_PART2_WORKFLOW key sections
+### 9.2 SPEC_PART2_WORKFLOW
 
-| Section | Owning design |
+| Section | Owners |
 |---|---|
-| §1.1 Session/Arrangement rule | TrackPlaybackArbiter (per-track override, return per-track/global) |
-| §1.2 Linked clips | ClipContent model (§6) |
-| §2 Workflow paths | Covered by areas 1–14 above; entry templates in ProjectRepositoryV2 |
-| §3 Signal flow | §3 of this blueprint (per-track pipelines, taps, PDC) |
-| §4 Common instrument behavior | DeviceNode contract + VoiceAllocator + preset system + A/B (DeviceDetailStateHolder) + CPU quality modes (per-device QualityMode param) |
-| §5 Instruments 5.1–5.12 | SubtractiveSynth, WavetableSynth, FmSynth, MacroSynth, SimpleSampler, MultiSampler, DrumPadSampler, DrumRackDevice, Mallet/String/EPiano models, SampleLibraryPlayer, ExternalInstrumentDevice, RackDevice |
-| §6 Onscreen input | InputSurfaceStateHolder/Screen (keyboard/scale-lock/isomorphic/pads/chords/fretboard/step; velocity, bend, MPE, note repeat, fixed velocity, simultaneous external MIDI) |
-| §7 MIDI recording/editor | Area 7 above + note properties (NoteModel MPE fields), piano-roll ops list in ClipEditorStateHolder reducers, drum editor via StepSequencerCore |
-| §8.1 Transformations (15) | MidiTransformOps (pure Kotlin domain functions on NoteModel selections, preview via temporary clip content; Arpeggiate/Chop/Connect/Glissando/ExpressionLFO/Ornament/Quantize/Humanize/Recombine/Span/Strum/TimeWarp/VelocityShaper/TransposeScale/InvertReverse) + StepEditOps for the drum editor (fill every 2/3/4/N, rotate lane, randomize selected properties with intensity — spec §7.4) |
-| §8.2 Generators (7) | MidiGeneratorOps (Rhythm/Seed/Shape/ChordStack/Euclidean/Bassline/Variation) — same preview/commit contract |
-| §8.3 Realtime MIDI effects (11) | device/midi_effects/* with ActiveNoteRegistry; output recordable via MidiTapBus |
-| §9 Scale, groove, MPE | ScaleContext (project/clip), GrooveEngine + GrooveTemplate + extraction, MPE record/edit lanes + conversion (MpeNoteState, expression lanes) |
-| §10 Audio effects (all) | device/effects/* catalog incl. common-behavior contract (bypass ramps, latency reporting, sidechain, oversampling flags, A/B, metering) |
-| §11 Chains & racks | DeviceChain ops, RackDevice zones/macros/variations, nested racks (D4 depth 3) |
-| §12 Automation & modulation | §5 parameter system; clip envelopes loop-independent lengths; Session→Arrangement automation conversion in ArrangementRecorder |
-| §13 Session→Arrangement | ArrangementRecorder (launch/scene/mixer/tempo capture → linked instances + automation), consolidate-section-to-scene op |
-| §14 Comping/bounce/resample | §7 + OfflineRenderEngine bounce matrix (clip/selection/track in-place/track new/group), FreezeEngine, ResampleTap targets |
-| §15 Phone translation | Focused contexts = screens sharing SelectionModel; audio never stops on navigation (engine lifecycle ≠ UI); ValueSlider coarse/fine/numeric; progressive depth = essential vs full panels per device; Eco/Standard/High QualityMode params; CpuLoadMonitor + thermal hooks; interruption handling in EngineController (focus loss → graceful stop, route change events, autosave); rotation-safe state (holders + SavedState) |
-| §16 Acceptance scenarios | Adopted as milestone definitions-of-done (§9) |
-| §17 Open decisions | Resolved as D1–D12 |
+| §1.1 | TrackPlaybackArbiter |
+| §1.2 | ClipContent model (§8) |
+| §2 | Areas 1–14 flows; templates in ProjectRepositoryV2 |
+| §3 | §3.1 pipelines, taps, PDC, monitoring choice, RecordTapPoint |
+| §4 | DeviceNode contract + presets + A/B + QualityMode + preserve-on-replace (§6) |
+| §5.1–5.12 | The 13 instrument devices (DrumPadSampler synthesis modes = drum-synth family) + RackDevice |
+| §6 | InputSurfaceStateHolder/Screen (all modes incl. fretboard, note repeat, fixed velocity, MPE, simultaneous external MIDI) |
+| §7 | Recording modes incl. SessionRecorder + replace/overdub + multi-take MIDI comping + MidiTapBus record; note properties in NoteModel; piano-roll + drum-editor ops (MidiTransformOps/StepEditOps) |
+| §8.1/8.2/8.3 | MidiTransformOps (15) / MidiGeneratorOps (7) / device/midi_effects (11, ActiveNoteRegistry, MidiActivityBus) |
+| §9 | ScaleContext, GrooveEngine (+extraction via AnalysisService; audio application via AudioClipPlayer micro-offsets), MPE lanes + conversion |
+| §10 | Effects catalog + common contract (§3.3 bypass/PDC, sidechain, metering, A/B, oversampling flags, Looper tempo-set) |
+| §11 | DeviceChain ops, racks (freq split incl.), macros, variations, nesting cap |
+| §12 | §5 layering; envelope loop-independence; Session→Arr automation conversion (ArrangementRecorder) |
+| §13 | ArrangementRecorder + consolidate-to-scene op |
+| §14 | Takes/comping (§8), bounce matrix (OfflineRenderEngine incl. external-instrument realtime capture), FreezeEngine, ResampleTap |
+| §15 | Focused contexts + SelectionModel; audio survives navigation (EngineController); ValueSlider precision; progressive depth panels; Eco/Std/High QualityMode; CpuLoadMonitor attribution + DegradationGovernor; interruption/rotation policies (EngineController + holders) |
+| §16 | Scenarios = milestone DoD (§11) |
+| §17 | D1–D13 |
 
-Gap check: every numbered spec section above has at least one named owner; drum
-editor lane auto-creation → StepSequencerCore + SamplerDrumLab UI; "record with
-or without effects" → RecordTapPoint; "compare with reference audio" →
-MasteringSuiteScreen A/B path; "prevent feedback" → RoutingTable validation;
-"safe recording when storage low" → RecordingWriter budget check + events.
+## 10. Seam contracts (the no-compile guardrail)
 
-## 9. Build order (milestones; scenario-mapped)
+The six seams below get a frozen contract **appendix file
+`docs/spec/CONTRACTS.md`, written as the first artifact of M0** (signature-level
+declarations, struct layouts with static size assertions, threading annotations,
+version fields). Contracts change only by editing that file first. Scope:
 
-- **M0 Engine foundation:** core/, dsp/ first wave (osc/filters/envelopes/LFO/
-  delay line/FFT), OboeDriver, AudioEngine skeleton, command queue, JNI codec,
-  CMake + build wiring. *(No sound features yet; foundation only.)*
-- **M1 Model v2 + timeline:** Kotlin domain/model + store rewrite (keeping UDF
-  shape), TempoMap, TimelineSnapshot, EngineModel/EngineSync, TransportEngine.
-- **M2 Graph & mixer:** graph/* (tracks, strips, sends/returns/groups, routing,
-  PDC, meters), MixerScreen wiring.
-- **M3 Device platform:** DeviceNode/chains, ParamRegistry/Resolver, VoiceAllocator,
-  presets, racks/macros/modulation core.
-- **M4 First sound:** SubtractiveSynth + MidiClipPlayer + SessionPlayer minimal +
-  metronome (scenario: play a clip). Then WavetableSynth, FmSynth.
-- **M5 Drums & sampling:** DrumRack + DrumPadSampler + StepSequencerCore +
-  SimpleSampler + SliceEngine (scenario 16.1 beat-from-scratch).
-- **M6 Audio tracks & recording:** media/ (decode/cache/stream), AudioClipPlayer,
-  recording path, takes/comping (scenario 16.3 vocal minus FX polish).
-- **M7 Warp & audio editing:** timestretch/, AudioEditor, groove.
-- **M8 Effects wave 1 (mix):** EQs, dynamics, delays, AlgorithmicReverb, utility,
-  meters. **M9 wave 2 (color):** saturation/dist/amp, modulation FX, AutoFilter.
-  **M10 wave 3 (advanced):** HybridReverb, pitch/vocal, spectral, BeatRepeat,
-  Looper, cleanup.
-- **M11 MIDI tools:** transformations + generators + realtime MIDI effects +
-  InputSurface (scenario 16.2).
-- **M12 Session depth:** follow actions, scenes tempo, ArrangementRecorder
-  (scenario 16.4), PerformanceScreen.
-- **M13 Automation/modulation UI**, clip envelopes, MIDI learn.
-- **M14 Browser/library/packs**, remaining instruments (MacroSynth, MultiSampler,
-  physical models, SampleLibraryPlayer, External).
-- **M15 Export/mastering** (scenario 16.5), freeze/bounce matrix.
-- **M16 Hardware/sync/reliability hardening** (scenario 16.6), interruption/
-  rotation audits, storage/CPU guards.
+1. **DeviceNode**: `prepare(rate, maxBlock)`, `process(ProcessContext&)`,
+   `reset()`, `latencySamples()`, bypass behavior (§3.3), `paramCount/
+   descriptor(i)`, `saveState/loadState(NodeState&)`, RT-safety annotations.
+2. **EngineCommand / message layout**: fixed 64-byte POD, `int64` sample
+   positions, `double` beats, editSeq field, enumerated op codes per family;
+   EventRing paired-slot rule for note on/off.
+3. **NodeState block**: header {NodeUid, ConfigHash, size, version}, POD body,
+   SampleHandle refcount rules, adopt-vs-reset criteria.
+4. **TimelineSnapshot read API**: per-clip iterators (notes, steps, envelope
+   segments, warp segments), bounded window guarantees, epoch/swap rules.
+5. **JNI wire formats**: CommandCodec + StateCodec framing, both with explicit
+   format-version fields from day one.
+6. **ParamId & ParamDescriptor**: semantic key hashing, descriptor fields
+   (range/curve/default/unit/smoothing/rt-flag/randomize-exclusion/quality),
+   key→index resolution rules.
+
+Plus the standing rule: `core/` + `dsp/` compile hostside (desktop CMake test
+target exists from M0; runs only when the user asks).
+
+## 11. Build order (dependency-corrected)
+
+- **M0 Foundation:** CONTRACTS.md; `core/` (rings, ParamMoveTable, EventRing,
+  EpochGc, pools, TimeAnchor); first `dsp/` wave; OboeDriver (duplex per D2);
+  AudioEngine skeleton + message drains; JNI codecs (versioned); CMake (device
+  + host targets).
+- **M1 Model & time:** Kotlin model v2 + store (+editSeq), EngineSync change
+  classification, TempoMap + TransportEngine (TimebaseSource), TimelineSnapshot
+  + swap mechanics, MidiScheduler.
+- **M2 Graph & mixer:** GraphBuilder + MigrationPlan + swap/ack, TrackNode
+  family, strips (conventions), sends/returns/groups, RoutingTable, PDC,
+  OutputBusMatrix (Main+Cue), meters; MixerScreen wiring.
+- **M3 Device platform:** DeviceNode + chains, ParamRegistry/Resolver (semantic
+  keys), VoiceAllocator + VoiceBudgetLedger, presets, racks/macros/modulation
+  core, QualityMode.
+- **M4 First sound:** SubtractiveSynth + MidiClipPlayer + SessionPlayer
+  (launch minimal) + MetronomeNode. Then WavetableSynth, FmSynth.
+- **M5 Drums & sampling** (pulls forward decode + resident SampleCache +
+  PreviewPlayer basics — the M6 streaming tier stays put): DrumRack,
+  DrumPadSampler, StepSequencerCore, SimpleSampler, SliceEngine,
+  SampleCaptureService. *(Scenario 16.1.)*
+- **M6 Audio tracks & recording:** DiskStreamRing/PrefetchPlanner tier,
+  AudioClipPlayer, duplex recording path + RecordingAligner, takes/comping,
+  SessionRecorder. *(Scenario 16.3 core.)*
+- **M7 Warp & audio editing:** timestretch/ (budget + proxies), AudioEditor,
+  GrooveEngine.
+- **M8–M10 Effects waves:** mix (EQs/dynamics/delays/AlgoReverb/utility/meters)
+  → color (sat/dist/amp, mod FX, AutoFilter) → advanced (HybridReverb,
+  pitch/vocal, spectral, BeatRepeat, Looper, cleanup).
+- **M11 MIDI tools + InputSurface.** *(Scenario 16.2.)*
+- **M12 Session depth:** follow actions, scene tempo (RT tempo events),
+  ArrangementRecorder, PerformanceScreen. *(Scenario 16.4.)*
+- **M13 Automation/modulation UI**, clip envelopes, MIDI learn (full targets).
+- **M14 Browser/library/packs** + remaining instruments (MacroSynth,
+  MultiSampler, physical models, SampleLibraryPlayer, External).
+- **M15 Export/mastering** (+DegradationGovernor, freeze/bounce matrix).
+  *(Scenario 16.5.)*
+- **M16 Hardware/sync/reliability hardening.** *(Scenario 16.6.)*
 
 Each milestone ends: ARCHITECTURE.md updated, data-flow walk, commit.
 
-## 10. Key decisions & rejected alternatives
+## 12. Key decisions & rejected alternatives
 
-| Decision | Rejected alternative | Why |
+| Decision | Rejected | Why |
 |---|---|---|
-| Dual model + rebuild/swap | Mutating one shared graph under locks | RT safety; proven by Tracktion/Live-class engines |
-| NodeStateRegistry migration on swap | Reset state on rebuild | Audible tail/voice drops on every edit — unacceptable |
-| Commands for params, rebuild for structure | Everything as commands | Structural edits under RT constraints breed heisenbugs; rebuild is simpler and bounded |
-| Immutable Kotlin model + persistent collections | In-place mutable model with listeners | Undo/redo, autosave diffing, thread hand-off all become trivial |
-| Meters/playhead bypass ProjectStore | All state through the store | 60 Hz × 64 tracks through reducers melts UI; store stays semantic |
-| signalsmith-stretch | RubberBand / SoundTouch | MIT vs GPL/commercial; quality vs artifacts at extremes |
-| Single :app + logical modules | Multi-module Gradle now | No compile step for months; split later is mechanical |
-| Fixed capacities (D4) | Dynamic everything | Pre-allocation is the RT contract; caps are phone-honest |
-| SFZ-subset for multisample import | Custom-only format | Spec asks for "standard non-proprietary mappings" |
-| Offline noise reduction (D11) | RT NR at launch | Phone CPU budget; spec allows offline render |
+| Dual model + compile/swap + MigrationPlan adoption | Locked shared graph; reset-on-rebuild | RT safety; no audible resets on edits |
+| Three change classes | Two (param/structure) | Note/automation edits are the most common op; per-clip snapshot swap keeps them cheap and stuck-note-safe |
+| Per-producer rings + ParamMoveTable + lossless EventRing | One SPSC "command queue" | Producer discipline, coalescing, and note-loss-impossible semantics |
+| editSeq stamping + post-swap re-apply | Hope | Fader rides during rebuilds must not jump |
+| Output-driven duplex (callback-less input) | Two independent callbacks | One clock master, defined monitoring latency (Oboe-recommended) |
+| RecordingAligner + TimeAnchor | "Calibration setting" | Sample-exact take placement is a design, not a preference |
+| Semantic param keys | Persisted indices | Survives device revisions/replacement (spec requirement) |
+| SyncAdapter in C++ | Link in Kotlin service | Phase alignment is audio-callback work |
+| Rate-keyed caches + conform-on-playback | "Project rate = device rate" absolutism | Route changes and cross-device projects are normal life |
+| Drop MP3 export | LAME (LGPL, extra .so) | Android has no MP3 encoder; AAC covers sharing; license posture intact |
+| CONTRACTS.md frozen seams + host-compilable core | Prose-only blueprint | Months without a compiler demand pinned interfaces |
+| signalsmith-stretch + budget/proxies | RubberBand/SoundTouch; unlimited RT stretch | License; phone CPU honesty |
+| Immutable Kotlin model + persistent collections | Mutable listeners | Undo, autosave, hand-off |
+| Meters/playhead bypass ProjectStore | Everything through store | 60 Hz × 64 tracks melts reducers |
+| Fixed capacities + budget tables | Dynamic everything | RT contract; tunable constructor budgets |
+| Single :app + logical modules | Gradle multi-module now | No compile for months; split later mechanical |
 
-## 11. Third-party inventory (license-vetted)
+## 13. Third-party inventory (license-vetted)
 
 | Library | Use | License |
 |---|---|---|
 | Oboe | Audio I/O | Apache-2.0 |
 | signalsmith-stretch | Warp/pitch | MIT |
 | pffft | FFT | BSD-like |
-| dr_wav / dr_flac / dr_mp3 | Decode | public domain / MIT-0 |
+| dr_wav / dr_flac / dr_mp3 | Decode | PD / MIT-0 |
 | libFLAC | FLAC encode | BSD |
-| Android MediaCodec | AAC/MP3 encode, AAC decode | platform |
-| WORLD (or derived formant code) | Formant/pitch analysis | modified-BSD |
-| Ableton Link | Sync (D8, flagged) | GPLv2 / commercial |
+| MediaCodec | AAC encode/decode | platform |
+| WORLD (or derived) | Formant/pitch analysis | modified-BSD |
+| Ableton Link | Sync (D8, flagged, isolated in SyncAdapter) | GPLv2 / commercial |
 | kotlinx.serialization / collections.immutable | Model | Apache-2.0 |
 | AMidi / android.media.midi | MIDI I/O | platform |
 
-No GPL code ships unless the Link decision is made explicitly.
+No GPL-family code ships unless the Link decision is made explicitly. No MP3
+encoder dependency exists (D5).

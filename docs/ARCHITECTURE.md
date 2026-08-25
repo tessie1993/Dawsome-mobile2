@@ -2,7 +2,7 @@
 
 This document is the **authoritative living map of the codebase**, maintained and kept continuously synchronized with every class, interface, method, and relationship implemented across the architecture (both Native C++ NDK DSP Engine and Kotlin UDF Layer).
 
-**Scope:** this map documents code that exists in the source tree today. The target end-state architecture is specified in [`docs/spec/ARCHITECTURE_BLUEPRINT.md`](spec/ARCHITECTURE_BLUEPRINT.md) (built from the functional specs [`SPEC_PART1_FUNCTIONAL.md`](spec/SPEC_PART1_FUNCTIONAL.md) and [`SPEC_PART2_WORKFLOW.md`](spec/SPEC_PART2_WORKFLOW.md)); classes move into this map when their source lands. The C++ classes under `app/src/main/cpp/` are present in source but not yet wired into the Gradle build (no CMake integration yet — that is the blueprint's M0 milestone).
+**Scope:** this map documents code that exists in the source tree today. The target end-state architecture is specified in [`docs/spec/ARCHITECTURE_BLUEPRINT.md`](spec/ARCHITECTURE_BLUEPRINT.md) (built from the functional specs [`SPEC_PART1_FUNCTIONAL.md`](spec/SPEC_PART1_FUNCTIONAL.md) and [`SPEC_PART2_WORKFLOW.md`](spec/SPEC_PART2_WORKFLOW.md)); classes move into this map when their source lands. The C++ classes under `app/src/main/cpp/` are present in source but not wired into the Gradle build, and are **condemned as reference-only**: they implement the blueprint's rejected mutable-shared-graph approach (string ids on RT nodes, string-keyed setParameter, mutable add/removeTrack) and must not be extended. They are replaced module-by-module from the blueprint's M0 milestone onward; their map entries below describe the code as it exists until each replacement lands.
 
 ```mermaid
 classDiagram
