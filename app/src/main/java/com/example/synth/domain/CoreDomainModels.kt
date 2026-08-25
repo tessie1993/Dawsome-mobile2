@@ -289,6 +289,7 @@ data class ProjectState(
     val isPlaying: Boolean = false,
     val isRecording: Boolean = false,
     val isLooping: Boolean = true,
+    val isMetronomeOn: Boolean = false,
     val loopStartBeat: Float = 0.0f,
     val loopEndBeat: Float = 16.0f,
     val playheadBeat: Float = 0.0f,
@@ -322,6 +323,7 @@ sealed interface ProjectAction {
     data object TogglePlay : ProjectAction
     data object ToggleRecord : ProjectAction
     data object ToggleLoop : ProjectAction
+    data object ToggleMetronome : ProjectAction
     data class SetBpm(val bpm: Float) : ProjectAction
     data class SeekToBeat(val beat: Float) : ProjectAction
     data class SetLoopRegion(val startBeat: Float, val endBeat: Float) : ProjectAction

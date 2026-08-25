@@ -87,6 +87,7 @@ class EngineSync(
             is ProjectAction.TogglePlay -> controller.send { togglePlay() }
             is ProjectAction.ToggleRecord -> controller.send { record(state.isRecording) }
             is ProjectAction.ToggleLoop -> controller.send { loop(state.isLooping) }
+            is ProjectAction.ToggleMetronome -> controller.send { metronome(state.isMetronomeOn) }
             is ProjectAction.SeekToBeat ->
                 controller.send { seekBeat(state.playheadBeat.toDouble()) }
             is ProjectAction.SetLoopRegion -> controller.send {

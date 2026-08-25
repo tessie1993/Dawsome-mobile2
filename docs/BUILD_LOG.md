@@ -6,6 +6,43 @@ Newest entry first. Each entry: where the build stands, what comes next.
 
 ---
 
+## 2026-08-25 — Earth V2 UI conformance pass 1 (user-flagged; portrait core)
+
+User called out that the UI does not look like the Earth.Design V2 pack.
+Audit verdict: token VALUES were genuinely the pack's (palette/glass tiers
+match TOKENS.json) but the pack's FONTS were never bundled, one glass tier
+misused the active rim, and the screens/components were never built from
+the pack's 14 reference renders in docs/spec/Earth.Design/assets/. Fixes:
+
+- Fonts: Outfit + Inter + JetBrains Mono vendored as variable TTFs
+  (res/font) with weight instancing (EarthFonts); every EarthTypography
+  style now resolves through them - zero system-default families.
+- Token corrections: GlassBorderHighlight to the spec's 8% white;
+  Level1Dock border to "subtle" per TOKENS.json (amber rim = levels 3/4).
+- EarthTransportBar rebuilt to the portrait reference + COMPONENTS.md §2:
+  floating rounded Level1 card (was a flush square strip), 36dp/6dp
+  buttons (were 32dp/4dp), record = #DC2626 per spec (crimson maple is
+  the ARM color), metronome toggle added, dark inset readout panel with
+  stacked BPM label/value, bars.beats.sixteenths timecode + project name.
+- Metronome went in as a FULL vertical: ProjectState.isMetronomeOn +
+  ToggleMetronome action/reducer + EngineSync branch -> encoder op ->
+  the engine's MetronomeNode (the engine side existed since M4; the
+  Kotlin layer never exposed it).
+- EarthNavigationDock rebuilt: floating rounded card, icon-over-label
+  items, active = amber-tinted glass chip (tokens' Primary/Active role).
+  Tab consolidation to the reference's SESSION/ARRANGE/MIX/EDIT/DEVICES/
+  MORE six-set is a UX decision deferred with a note.
+- Deferred to pass 2 (screen milestones): knob halo/mod-ring detailing,
+  clip-tile launch states, per-screen recomposition against the remaining
+  reference renders (arranger/browser/mastering/synth/sampler sheets).
+- Map 200 classes (+EarthFonts), sweep green incl. duplicates. Kotlin
+  compile verified by CI (no host Kotlin toolchain).
+
+Review gate cycle 2 covers this batch + the v1.2.0 contracts slice; M5
+finale (#29) stays paused mid-slice and resumes after.
+
+---
+
 ## 2026-08-25 — Review gate cycle 1 CLOSED: PASS. PR #8 merged; specs re-confirmed
 
 The reviewer re-verified every cycle-1 fix in code (including

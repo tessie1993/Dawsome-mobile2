@@ -1196,8 +1196,13 @@ classDiagram
         +GlassElevation Level4Modal
     }
 
+    class EarthFonts {
+        <<object; the PACK'S mandated faces (TOKENS.json fontFamilies) vendored as variable TTFs in res/font - Outfit (primary, Inter behind it) + JetBrains Mono, weight-instanced via font variation settings (API 26+; 24/25 fall back to each file's default instance). Every EarthTypography style resolves through these - no system-default families anywhere>>
+        +FontFamily Primary
+        +FontFamily Mono
+    }
     class EarthTypography {
-        <<data class>>
+        <<data class; all styles on EarthFonts (pack conformance pass 1)>>
         +TextStyle displayTime
         +TextStyle bpmValue
         +TextStyle trackTitle
@@ -1207,6 +1212,8 @@ classDiagram
         +TextStyle microBadge
     }
 
+    EarthTypography ..> EarthFonts
+
     class EarthTheme {
         <<composable + object>>
         +EarthTheme(colors: EarthColors, typography: EarthTypography, content)
@@ -1215,7 +1222,7 @@ classDiagram
     }
 
     class EarthTransportBar {
-        <<composable>>
+        <<composable; rebuilt to the pack's portrait reference + COMPONENTS.md §2 (conformance pass 1): FLOATING rounded Level1 crystal card, five-button cluster at the spec'd 36dp/6dp (play amber-filled, stop, record #DC2626 - crimson maple stays the ARM color, loop infinity, metronome toggle), dark inset readout panel (stacked BPM label/amber-mono value, clock + bars.beats.sixteenths timecode, project name, time sig), undo/redo micro buttons. Private TransportButton/MicroButton recipes>>
     }
 
     class MacroCutoffKnob {
@@ -1492,12 +1499,14 @@ classDiagram
     %% 5. MODULAR UI STATE HOLDERS (COMPOSE RETAINED)
     %% ==========================================
     class TransportStateHolder {
+        <<UiState adds isMetronomeOn (full vertical: ProjectState flag + ToggleMetronome action/reducer + EngineSync -> encoder metronome op -> engine MetronomeNode), barsBeatsFormatted (the reference readout's 001.03.00 bars.beats.sixteenths) and projectName>>
         +StateFlow~TransportUiState~ state
         +play()
         +stop()
         +togglePlay()
         +toggleRecord()
         +toggleLoop()
+        +toggleMetronome()
         +setBpm(bpm: Float)
         +seekToBeat(beat: Float)
         +setLoopRegion(start: Float, end: Float)

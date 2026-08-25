@@ -14,6 +14,7 @@ data class TransportUiState(
     val isPlaying: Boolean,
     val isRecording: Boolean,
     val isLooping: Boolean,
+    val isMetronomeOn: Boolean,
     val bpm: Float,
     val timeSigNum: Int,
     val timeSigDen: Int,
@@ -22,7 +23,9 @@ data class TransportUiState(
     val playheadBeat: Float,
     val loopStartBeat: Float,
     val loopEndBeat: Float,
-    val timecodeFormatted: String
+    val timecodeFormatted: String,
+    val barsBeatsFormatted: String,
+    val projectName: String
 )
 
 class TransportStateHolder(
@@ -45,6 +48,7 @@ class TransportStateHolder(
     fun togglePlay() = store.dispatch(ProjectAction.TogglePlay)
     fun toggleRecord() = store.dispatch(ProjectAction.ToggleRecord)
     fun toggleLoop() = store.dispatch(ProjectAction.ToggleLoop)
+    fun toggleMetronome() = store.dispatch(ProjectAction.ToggleMetronome)
     fun setBpm(bpm: Float) = store.dispatch(ProjectAction.SetBpm(bpm))
     fun seekToBeat(beat: Float) = store.dispatch(ProjectAction.SeekToBeat(beat))
     fun setLoopRegion(start: Float, end: Float) = store.dispatch(ProjectAction.SetLoopRegion(start, end))
@@ -58,6 +62,13 @@ class TransportStateHolder(
             val millis = ((p.playheadBeat % 1.0f) * 100).toInt()
             val formatted = String.format("%02d:%02d:%02d", minutes, seconds, millis)
 
+            // Reference readout format: bars.beats.sixteenths (001.03.00).
+            val sig = if (p.timeSigNum > 0) p.timeSigNum else 4
+            val bar = (p.playheadBeat / sig).toInt() + 1
+            val beatInBar = (p.playheadBeat % sig).toInt() + 1
+            val sixteenth = ((p.playheadBeat % 1.0f) * 4).toInt()
+            val barsBeats = String.format("%03d.%02d.%02d", bar, beatInBar, sixteenth)
+
             return TransportUiState(
                 isPlaying = p.isPlaying,
                 isRecording = p.isRecording,
@@ -70,7 +81,10 @@ class TransportStateHolder(
                 playheadBeat = p.playheadBeat,
                 loopStartBeat = p.loopStartBeat,
                 loopEndBeat = p.loopEndBeat,
-                timecodeFormatted = formatted
+                timecodeFormatted = formatted,
+                barsBeatsFormatted = barsBeats,
+                projectName = p.name,
+                isMetronomeOn = p.isMetronomeOn
             )
         }
     }
