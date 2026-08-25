@@ -9,11 +9,11 @@
 ## Table of Contents
 
 1. [System Overview & Philosophy](#system-overview--philosophy)
-2. [Visual Architecture & Design Tokens](file:///c:/Users/tessi/antigravity/Dawsome-mobile2/docs/spec/Earth.Design/FOUNDATIONS.md)
-3. [Pro-Audio UI Component Suite](file:///c:/Users/tessi/antigravity/Dawsome-mobile2/docs/spec/Earth.Design/COMPONENTS.md)
-4. [Master Screen Specifications](file:///c:/Users/tessi/antigravity/Dawsome-mobile2/docs/spec/Earth.Design/SCREENS.md)
-5. [Machine-Readable Design Tokens (`TOKENS.json`)](file:///c:/Users/tessi/antigravity/Dawsome-mobile2/docs/spec/Earth.Design/TOKENS.json)
-6. [Kotlin Jetpack Compose Implementation](file:///c:/Users/tessi/antigravity/Dawsome-mobile2/docs/spec/Earth.Design/tokens/)
+2. [Visual Architecture & Design Tokens](FOUNDATIONS.md)
+3. [Pro-Audio UI Component Suite](COMPONENTS.md)
+4. [Master Screen Specifications](SCREENS.md)
+5. [Machine-Readable Design Tokens (`TOKENS.json`)](TOKENS.json)
+6. Kotlin Jetpack Compose implementation: `app/src/main/java/com/example/ui/theme/earth/`
 
 ---
 
@@ -52,10 +52,9 @@ docs/spec/Earth.Design/
 ├── COMPONENTS.md           # Detailed UI component specs (Knobs, Faders, Pads, Clips)
 ├── SCREENS.md              # 9 Full visual screen mockups with workflow specs
 ├── TOKENS.json             # Cross-platform machine-readable design tokens
-├── tokens/
-│   ├── ColorTokens.kt      # Compose Color definitions
-│   ├── GlassTokens.kt      # Compose Glassmorphism modifiers & border shaders
-│   ├── TypeTokens.kt       # Compose Typography definitions (Inter / Outfit)
-│   └── EarthTheme.kt       # Compose Material3 Theme & CompositionLocals
 └── assets/                 # High-resolution component sheets & screen mockups
 ```
+
+The Compose implementation of these tokens lives in the app source tree:
+`app/src/main/java/com/example/ui/theme/earth/` (`ColorTokens.kt`,
+`GlassTokens.kt`, `TypeTokens.kt`, `EarthTheme.kt`).

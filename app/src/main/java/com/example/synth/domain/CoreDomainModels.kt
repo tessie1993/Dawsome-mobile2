@@ -3,7 +3,7 @@ package com.example.synth.domain
 import java.util.UUID
 
 /**
- * Track Types according to SPEC01.md & ARCHITECTURE_PLAN.md
+ * Track Types according to SPEC01.md & implementation_plan.md
  */
 enum class TrackType(val displayName: String) {
     MIDI("MIDI / Instrument"),

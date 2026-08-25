@@ -1,6 +1,0 @@
-{
-  "name": "PULSEGRID",
-  "description": "Professional studio DAW & modular synthesiser workstation featuring multi-track arranger, advanced MIDI clip piano roll with velocity/expression lanes, Ableton-style device chain, wavetable synthesis, drum rack, and real-time audio effects.",
-  "requestFramePermissions": [],
-  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
-}
