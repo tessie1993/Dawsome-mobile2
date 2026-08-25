@@ -6,6 +6,42 @@ Newest entry first. Each entry: where the build stands, what comes next.
 
 ---
 
+## 2026-08-25 — M1 feature 2 done: EngineModel + TimelineSnapshot + GraphBuilder
+
+The builder side of the dual-model architecture is live:
+
+- `jni/DeltaSchemas.h` — versioned payload layouts per entityKind (Track 20B,
+  Clip 40B, ClipContent head+NoteRecords, Device 16B, Scene 8B, TempoMap
+  head+events) + the ModelDeltaEnvelope (editSeq per bundle). byteLen==0 =
+  remove; entityId = the same makeNodeUid used everywhere.
+- `engine/EngineModel.{h,cpp}` — builder-thread-only mirror of the edit
+  model: idempotent delta application, dirty classes (Timeline/Tempo/Graph),
+  non-cascading removal (compiles skip dangling refs, counted - seam-4 skew),
+  Rack/Routing/LaneGroup/Groove deferred to M2/M3.
+- `sequencer/TimelineSnapshot.h` — immutable compiled timeline: flat stores
+  (exact-reserve-then-fill keeps view pointers stable), per-track ClipViews
+  sorted by placement, notes sorted content-local, binary-search NoteSpans;
+  stamped {epoch, builtFromEditSeq, tempoMapRev}.
+- `graph/GraphBuilder.{h,cpp}` — the compile thread (50ms cycle): mutex
+  inbox of delta bundles (engine-io producer preserves edit order), model
+  apply, timeline rebuild on dirty, tempo base rebuild from model deltas
+  (rate-gated with retry), forced tail consolidation sampling the SAME
+  governing function at boundary beats (equal-tempo merges preserve
+  post-seek sample discontinuities; consolidation skipped while an offer is
+  in flight). OfferSlot epoch GC: only the builder frees, only after RT
+  acks; tempo background pointer republishes when the predecessor's ack
+  proves the claim.
+- AudioEngine now constructs/joins the builder (model syncs while streams
+  are closed), claims offered timelines at block boundaries (ack-retire),
+  exposes builder()/timelineOffer()/timeline(); bridge routes ModelDelta
+  payloads into the builder inbox. TempoMap.sampleRate became atomic
+  (prepare writes vs builder reads).
+- Map: 133 classes, sweep green.
+
+**Next: M1 feature 3 — MidiScheduler** (spans + timeline snapshot + map ->
+sample-offset-sorted note events, sounding-note table, loop-pass indices,
+synthetic offs on snapshot swap). Then f4: Kotlin model v2 + delta sync.
+
 ## 2026-08-25 — M1 feature 1 done: TempoMap + TransportEngine
 
 `cpp/sequencer/` begins. TempoMap implements the frozen contract: immutable

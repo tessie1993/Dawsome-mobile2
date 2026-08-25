@@ -1,14 +1,17 @@
 #pragma once
 
 #include <atomic>
+#include <memory>
 
 #include "../core/EngineConfig.h"
 #include "../core/EventRing.h"
 #include "../core/MeterFrame.h"
+#include "../core/OfferSlot.h"
 #include "../core/ParamMoveTable.h"
 #include "../core/Seqlock.h"
 #include "../core/SpscRing.h"
 #include "../core/TimeAnchor.h"
+#include "../sequencer/TimelineSnapshot.h"
 #include "../sequencer/TransportEngine.h"
 #include "OboeDriver.h"
 
@@ -23,6 +26,8 @@
 // threads own their respective channels); render() is the audio thread.
 
 namespace daw {
+
+class GraphBuilder;
 
 // Per-block transport snapshot for UI playheads (blueprint 2.5 readback).
 struct TransportClockData {
@@ -39,6 +44,11 @@ inline constexpr uint32_t kClockMetronome = 1u << 3;
 
 class AudioEngine final : public RenderSink {
 public:
+    // The builder thread spawns with the engine and lives until destruction,
+    // so the model syncs even while audio streams are closed.
+    AudioEngine();
+    ~AudioEngine() override;
+
     // ---- lifecycle [non-RT] -------------------------------------------------
     bool start(const OboeDriver::Config& cfg) noexcept;
     void stop() noexcept;
@@ -63,6 +73,11 @@ public:
     // exists for the bridge's status assembly and the builder's map access.
     const TransportEngine& transport() const noexcept { return transport_; }
     TransportEngine&       transport() noexcept { return transport_; }
+    GraphBuilder&          builder() noexcept { return *builder_; }
+    // Builder -> RT handover slot for compiled timelines (seam 4).
+    OfferSlot<TimelineSnapshot>& timelineOffer() noexcept { return timelineOffer_; }
+    // [RT] the currently installed timeline (null before the first claim).
+    const TimelineSnapshot* timeline() const noexcept { return timeline_; }
     uint64_t droppedNotes() const noexcept { return droppedNotes_.load(std::memory_order_relaxed); }
     uint64_t panics() const noexcept { return panics_.load(std::memory_order_relaxed); }
 
@@ -89,6 +104,12 @@ private:
 
     // The real transport (M1): TempoMap + state machine + span splitting.
     TransportEngine transport_;
+
+    // Compiled-timeline handover (builder offers, RT claims + acks).
+    OfferSlot<TimelineSnapshot> timelineOffer_;
+    const TimelineSnapshot* timeline_ = nullptr;   // RT-owned current pointer
+
+    std::unique_ptr<GraphBuilder> builder_;
 
     // Input drain scratch (monitoring paths arrive at M2/M6).
     float inScratchL_[kMaxBlock]{};

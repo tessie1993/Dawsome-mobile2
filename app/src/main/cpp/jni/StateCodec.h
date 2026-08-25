@@ -24,6 +24,8 @@
 // These frames normally travel inside a CommandCodec ModelDelta frame; the
 // C++ -> Kotlin EngineEventBus (mustDeliver events + sequence numbers,
 // arriving with the recording/export milestones) frames identically.
+// Payload layouts per entityKind live in DeltaSchemas.h; byteLen == 0 means
+// REMOVE the entity (idempotent, like the upserts).
 //
 // Version discipline matches CommandCodec: unknown version refuses the rest
 // of the buffer (count + surface, never crash); unknown entityKind within a

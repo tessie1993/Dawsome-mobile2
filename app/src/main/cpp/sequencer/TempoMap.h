@@ -1,5 +1,6 @@
 #pragma once
 
+#include <atomic>
 #include <cstdint>
 #include <mutex>
 
@@ -93,7 +94,7 @@ public:
     // ---- lifecycle [non-RT, before streams start] ---------------------------
 
     void prepare(double sampleRate, double defaultBpm = 120.0) noexcept {
-        sampleRate_ = sampleRate;
+        sampleRate_.store(sampleRate, std::memory_order_relaxed);
         defaultBase_.segments.clear();
         defaultBase_.segments.push_back(
             {0.0, 0, sampleRate > 0.0 ? sampleRate * 60.0 / defaultBpm : 0.0});
@@ -109,7 +110,8 @@ public:
         }
     }
 
-    double sampleRate() const noexcept { return sampleRate_; }
+    // Atomic: prepare() writes on the control thread while the builder reads.
+    double sampleRate() const noexcept { return sampleRate_.load(std::memory_order_relaxed); }
 
     // ---- audio thread -------------------------------------------------------
 
@@ -117,11 +119,12 @@ public:
     // effect. Continuity at the splice holds by construction: the anchor is
     // the position pair the transport is actually at.
     void rtSetTempo(double bpm, int64_t atSample, double atBeat) noexcept {
-        if (bpm <= 0.0 || sampleRate_ <= 0.0) return;
+        const double rate = sampleRate();
+        if (bpm <= 0.0 || rate <= 0.0) return;
         TempoTailEvent e;
         e.startBeat = atBeat;
         e.startSample = atSample;
-        e.samplesPerBeat = sampleRate_ * 60.0 / bpm;
+        e.samplesPerBeat = rate * 60.0 / bpm;
         e.rev = ++rev_;
         if (tailCount_ < kTempoTailCap) {
             tail_[tailCount_++] = e;
@@ -167,7 +170,7 @@ public:
     }
     double bpmAt(double beat) const noexcept {
         const double spb = samplesPerBeatAtImpl(*rtBase_, tail_, tailCount_, beat);
-        return spb > 0.0 ? sampleRate_ * 60.0 / spb : 0.0;
+        return spb > 0.0 ? sampleRate() * 60.0 / spb : 0.0;
     }
 
     // Bar|beat display + metronome accents + launch grids. Uses the base
@@ -236,7 +239,7 @@ public:
         }
         tailPub_.read(s.tail);
         s.rev = s.tail.rev;
-        s.sampleRate = sampleRate_;
+        s.sampleRate = sampleRate();
         return s;
     }
 
@@ -308,7 +311,7 @@ private:
         tailPub_.publish(block);
     }
 
-    double sampleRate_ = 0.0;
+    std::atomic<double> sampleRate_{0.0};
 
     // RT-owned state.
     TempoMapBase defaultBase_;                   // immortal fallback (epoch 0)

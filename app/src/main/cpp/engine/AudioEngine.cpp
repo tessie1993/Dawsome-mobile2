@@ -3,8 +3,20 @@
 #include <cmath>
 
 #include "../core/ScopedNoDenormals.h"
+#include "../graph/GraphBuilder.h"
 
 namespace daw {
+
+// builder_ is the last member: everything it touches (transport, offer
+// slots, rings) is fully constructed before its thread spawns.
+AudioEngine::AudioEngine() : builder_(std::make_unique<GraphBuilder>(*this)) {
+    builder_->start();
+}
+
+AudioEngine::~AudioEngine() {
+    stop();               // streams closed -> no more render() callbacks
+    builder_->stop();     // join before members are torn down
+}
 
 bool AudioEngine::start(const OboeDriver::Config& cfg) noexcept {
     if (!driver_.open(*this, cfg)) return false;
@@ -94,9 +106,16 @@ void AudioEngine::render(float* const* outputs, int numFrames,
     });
     midiParams_.drainDirty([](NodeUid, ParamKeyHash, double, uint32_t) {});
 
-    // 3) Advance the transport: claims any offered tempo base, splits the
-    //    block at a loop wrap. Spans drive the MidiScheduler (M1 f3) and the
-    //    graph render (M2); until then they only carry the clock forward.
+    // 3) Block-boundary swaps + transport advance. Claim any offered
+    //    timeline (ack retires the predecessor - the builder frees it only
+    //    after this ack); the transport's advance() claims offered tempo
+    //    bases the same way and splits the block at a loop wrap. Spans drive
+    //    the MidiScheduler (M1 f3) and the graph render (M2).
+    if (TimelineSnapshot* ts = timelineOffer_.claim()) {
+        const TimelineSnapshot* retired = timeline_;
+        timeline_ = ts;
+        if (retired != nullptr) timelineOffer_.ackRetired(retired->epoch);
+    }
     TransportSpan spans[2];
     transport_.advance(numFrames, spans);
 

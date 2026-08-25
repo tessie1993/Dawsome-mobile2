@@ -2,7 +2,7 @@
 
 This document is the **authoritative living map of the codebase**, maintained and kept continuously synchronized with every class, interface, method, and relationship implemented across the architecture (both Native C++ NDK DSP Engine and Kotlin UDF Layer).
 
-**Scope:** this map documents code that exists in the source tree today. The target end-state architecture is specified in [`docs/spec/ARCHITECTURE_BLUEPRINT.md`](spec/ARCHITECTURE_BLUEPRINT.md) (contracts: [`CONTRACTS.md`](spec/CONTRACTS.md); functional specs: [`SPEC_PART1_FUNCTIONAL.md`](spec/SPEC_PART1_FUNCTIONAL.md), [`SPEC_PART2_WORKFLOW.md`](spec/SPEC_PART2_WORKFLOW.md)); classes move into this map when their source lands. The old pre-blueprint C++ skeleton has been fully removed - `app/src/main/cpp/` now contains only new-engine modules (`core/`, `dsp/`, `engine/`, `jni/`, `sequencer/`) built to the blueprint, not yet wired into the Gradle build (that happens when the engine is ready to link; blueprint M0).
+**Scope:** this map documents code that exists in the source tree today. The target end-state architecture is specified in [`docs/spec/ARCHITECTURE_BLUEPRINT.md`](spec/ARCHITECTURE_BLUEPRINT.md) (contracts: [`CONTRACTS.md`](spec/CONTRACTS.md); functional specs: [`SPEC_PART1_FUNCTIONAL.md`](spec/SPEC_PART1_FUNCTIONAL.md), [`SPEC_PART2_WORKFLOW.md`](spec/SPEC_PART2_WORKFLOW.md)); classes move into this map when their source lands. The old pre-blueprint C++ skeleton has been fully removed - `app/src/main/cpp/` now contains only new-engine modules (`core/`, `dsp/`, `engine/`, `graph/`, `jni/`, `sequencer/`) built to the blueprint, not yet wired into the Gradle build (that happens when the engine is ready to link; blueprint M0).
 
 ```mermaid
 classDiagram
@@ -276,6 +276,51 @@ classDiagram
     TransportEngine *-- TempoMap
     TransportEngine ..> TransportSpan
 
+    %% ---- M1 sequencer/ (TimelineSnapshot - seam-4 compiled timeline) ----
+    class SnapshotNote {
+        <<immutable note POD in a snapshot's flat store>>
+        +uint32_t id
+        +uint16_t pitch
+        +uint16_t velocity
+        +double startBeat
+        +double lengthBeats
+    }
+    class NoteSpan {
+        <<pointer+count read window (seam-4 span idiom)>>
+        +const SnapshotNote* data
+        +size_t count
+    }
+    class ClipView {
+        <<one placed arrangement clip with shared content resolved; notes sorted by content-local startBeat>>
+        +NodeUid clipUid
+        +NodeUid trackUid
+        +NodeUid contentUid
+        +double startBeat
+        +double lengthBeats
+        +double contentLengthBeats
+        +bool looping
+        +notesInRange(fromBeat, toBeat) NoteSpan
+    }
+    class TrackTimeline {
+        <<per-track view: arrangement clips sorted by placement>>
+        +NodeUid trackUid
+        +uint8_t trackType
+        +const ClipView* clips
+        +uint32_t clipCount
+    }
+    class TimelineSnapshot {
+        <<immutable builder-compiled timeline artifact: flat stores + views (pointers stable by exact-reserve-then-fill); epoch (OfferSlot), builtFromEditSeq (ordering rule), tempoMapRev (stale detect); RT only reads. Session-slot views join at M5; dangling refs skipped at compile (seam-4 skew)>>
+        +uint64_t epoch
+        +uint32_t builtFromEditSeq
+        +uint32_t tempoMapRev
+        +trackByUid(uid) TrackTimeline*
+    }
+
+    TimelineSnapshot *-- SnapshotNote
+    TimelineSnapshot *-- ClipView
+    TimelineSnapshot *-- TrackTimeline
+    ClipView ..> NoteSpan
+
     %% ---- M0 engine/ (NEW ENGINE - driver + callback spine) ----
     class StreamTime {
         <<per-callback DAC anchor from Oboe stream timestamps>>
@@ -326,6 +371,9 @@ classDiagram
         +clock() TransportClockData
         +anchor() TimeAnchor
         +transport() TransportEngine
+        +builder() GraphBuilder
+        +timelineOffer() OfferSlot~TimelineSnapshot~
+        +timeline() TimelineSnapshot*
         +render(outputs, numFrames, input, time)
     }
 
@@ -335,9 +383,73 @@ classDiagram
     AudioEngine *-- OboeDriver
     AudioEngine *-- TransportEngine
     AudioEngine *-- ParamMoveTable
+    AudioEngine *-- GraphBuilder
     AudioEngine ..> EngineMessage
     AudioEngine ..> MeterFrame
     AudioEngine ..> TimeAnchor
+    AudioEngine ..> TimelineSnapshot
+
+    %% ---- M1 engine/ (EngineModel - the builder-side edit-model mirror) ----
+    class ModelNote {
+        <<builder-side note (content-local)>>
+        +uint32_t id
+        +uint16_t pitch
+        +uint16_t velocity
+        +double startBeat
+        +double lengthBeats
+    }
+    class ModelTrack {
+        <<track mirror: type, flags, order, mixer values>>
+    }
+    class ModelClip {
+        <<clip placement mirror: trackUid, contentUid (linked-clip ref), startBeat, lengthBeats, slotIndex (-1 = arrangement), looping>>
+    }
+    class ModelClipContent {
+        <<shared clip content mirror: loop length + notes (unsorted; snapshots sort)>>
+    }
+    class ModelDevice {
+        <<device mirror: trackUid, type, enabled, chain order>>
+    }
+    class ModelScene {
+        <<scene mirror: index>>
+    }
+    class ModelTempo {
+        <<canonical tempo/meter event lists (sorted at apply)>>
+    }
+    class EngineModel {
+        <<compact C++ mirror of the edit model (blueprint 2.3): GraphBuilder-thread-only, fed by StateCodec deltas (idempotent upserts; byteLen 0 = remove; non-cascading - compiles skip dangling refs per seam-4 skew); dirty classes kDirtyTimeline/Tempo/Graph consumed per build cycle; Rack/Routing/LaneGroup/Groove kinds counted-deferred to M2/M3>>
+        +applyDelta(d: EntityDelta) bool
+        +consumeDirty() uint32_t
+        +tracks() / clips() / contents() / devices() / scenes() / tempo()
+        +lastEditSeq() uint32_t
+        +noteEditSeq(seq)
+    }
+
+    EngineModel *-- ModelTrack
+    EngineModel *-- ModelClip
+    EngineModel *-- ModelClipContent
+    EngineModel *-- ModelDevice
+    EngineModel *-- ModelScene
+    EngineModel *-- ModelTempo
+    ModelClipContent *-- ModelNote
+    EngineModel ..> EntityDelta
+
+    %% ---- M1 graph/ (GraphBuilder - the background compile thread) ----
+    class GraphBuilder {
+        <<owns EngineModel + the compile thread (50ms wait_for cycle): drains ModelDelta bundle inbox (mutex+condvar; single engine-io producer preserves edit order), applies deltas, rebuilds dirty artifacts - TimelineSnapshot (exact-reserve flat stores), TempoMapBase from model tempo deltas (rate-gated, retried) or forced tail consolidation (samples the SAME governing function at boundary beats; equal-tempo merges preserve post-seek discontinuities; skipped while an offer is in flight). All handovers via OfferSlot epochs; only this thread frees retired artifacts (after RT ack; tempo bg pointer republished once predecessor ack proves the claim). PlaybackGraph compile joins at M2>>
+        +start()
+        +stop()
+        +submitDeltas(payload, len)
+        +nudge()
+        +deltasApplied() / deltasRejected() / timelineBuilds() / tempoBuilds() / danglingRefs()
+    }
+
+    GraphBuilder *-- EngineModel
+    GraphBuilder ..> TimelineSnapshot
+    GraphBuilder ..> TempoMapBase
+    GraphBuilder ..> StateCodec
+    GraphBuilder ..> ModelDeltaEnvelope
+    GraphBuilder ..> AudioEngine
 
     %% ---- M0 jni/ (NEW ENGINE - seam-5 wire codecs + the one JNI TU) ----
     class FrameHeader {
@@ -362,6 +474,38 @@ classDiagram
         +uint64_t entityId
         +const uint8_t* payload
         +uint32_t byteLen
+    }
+    class ModelDeltaEnvelope {
+        <<8-byte prefix of every ModelDelta payload: editSeq stamps the bundle (one edit action = one bundle)>>
+        +uint32_t editSeq
+        +uint32_t flags
+    }
+    class TrackDeltaPayload {
+        <<20B: type, flags (mute/solo/arm/override), order, volumeDb, pan, sendA, sendB>>
+    }
+    class ClipDeltaPayload {
+        <<40B: trackUid, contentUid (linked-clip ref), startBeat, lengthBeats, slotIndex (-1 = arrangement), loop flag>>
+    }
+    class ClipContentDeltaHead {
+        <<16B head: lengthBeats + noteCount, followed by NoteRecords>>
+    }
+    class NoteRecord {
+        <<24B: id (fnv32), pitch, velocity, startBeat, lengthBeats; drum steps flatten to these Kotlin-side>>
+    }
+    class DeviceDeltaPayload {
+        <<16B: trackUid, deviceType, enabled flag, chain order>>
+    }
+    class SceneDeltaPayload {
+        <<8B: index + reserved flags>>
+    }
+    class TempoMapDeltaHead {
+        <<8B head: tempoCount + sigCount, followed by TempoEventRecords then SigEventRecords>>
+    }
+    class TempoEventRecord {
+        <<16B: beat + bpm (constant until next; ramps densify at M13)>>
+    }
+    class SigEventRecord {
+        <<16B: bar-aligned beat + numerator/denominator>>
     }
     class EngineStatusWire {
         <<80-byte frozen poll POD (ReadbackWire.h): status flags (clock bits + running/needsReopen/inputOpen), transport clock, TimeAnchor, stream facts, engine counters>>
@@ -388,7 +532,7 @@ classDiagram
         +atomic~uint32_t~ deferredFrames
     }
     class PushVisitor {
-        <<routes decoded records: Param/Move -> ParamMoveTable.set (overflow = reconcile flag, never backpressure), everything else -> EventRing.tryPush (refusal = backpressure); BlockSet/ModelDelta counted-deferred until builder (M1/M2)>>
+        <<routes decoded records: Param/Move -> ParamMoveTable.set (overflow = reconcile flag, never backpressure), everything else -> EventRing.tryPush (refusal = backpressure); ModelDelta payloads -> GraphBuilder.submitDeltas; ParamBlockSet counted-deferred until the graph (M2)>>
         +onMessage(m: EngineMessage) bool
         +onControl(c: ControlOpPayload) bool
         +onBlockSet(p, len)
@@ -404,6 +548,7 @@ classDiagram
     BridgeHandle ..> PushVisitor
     BridgeHandle ..> EngineStatusWire
     PushVisitor ..> AudioEngine
+    PushVisitor ..> GraphBuilder
 
     %% ==========================================
     %% 2. APP ENTRY POINT & WORKSPACE SCREENS (EARTH.DESIGN)

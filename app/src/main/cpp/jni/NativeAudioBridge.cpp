@@ -57,7 +57,7 @@ struct BridgeHandle {
     AudioEngine engine;
     std::atomic<bool>     running{false};
     std::atomic<uint32_t> codecErrors{0};     // malformed push buffers (encoder bug)
-    std::atomic<uint32_t> deferredFrames{0};  // BlockSet/ModelDelta before the builder exists
+    std::atomic<uint32_t> deferredFrames{0};  // ParamBlockSet frames before the graph (M2)
 };
 
 BridgeHandle* fromHandle(jlong h) noexcept {
@@ -94,11 +94,15 @@ struct PushVisitor {
         return true;   // ControlOpCode::Nop is the only op today
     }
 
-    // Bulk-set buffers ride the builder (M2 graph) and model deltas the
-    // EngineModel (M1); until those exist the frames are counted so the
-    // Kotlin side can see them not landing.
+    // Bulk-set buffers ride the graph (M2); counted-deferred until then.
     void onBlockSet(const uint8_t*, uint32_t) noexcept { ++deferred; }
-    void onModelDelta(const uint8_t*, uint32_t) noexcept { ++deferred; }
+
+    // Model deltas feed the GraphBuilder's EngineModel (M1). submitDeltas
+    // copies the payload; this engine-io thread is the single producer, so
+    // edit-dispatch order is preserved into the builder's inbox.
+    void onModelDelta(const uint8_t* p, uint32_t len) noexcept {
+        engine.builder().submitDeltas(p, len);
+    }
 };
 
 // ---- natives (registered below; signatures must match NativeAudioBridge.kt)

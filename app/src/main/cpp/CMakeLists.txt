@@ -23,8 +23,10 @@ target_include_directories(dawcore_core INTERFACE ${CMAKE_CURRENT_SOURCE_DIR})
 
 if(ANDROID)
     add_library(dawcore SHARED
-        engine/OboeDriver.cpp
         engine/AudioEngine.cpp
+        engine/EngineModel.cpp
+        engine/OboeDriver.cpp
+        graph/GraphBuilder.cpp
         jni/NativeAudioBridge.cpp
         )
     target_link_libraries(dawcore PRIVATE dawcore_core)
