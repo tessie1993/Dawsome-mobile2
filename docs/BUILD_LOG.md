@@ -40,7 +40,14 @@ in git history before this commit.
 - `docs/ARCHITECTURE.md` updated after each feature; bidirectional
   map↔source sweep green (119 classes).
 
-**Next (M0 feature 3): engine driver + engine skeleton**
+**DONE (M0 feature 3): engine driver + engine skeleton** — InputJitterRing
+(D2 policies), OboeDriver (full-duplex per the researched pattern, sub-chunks
+bursts to kMaxBlock, timestamps → StreamTime, reopen flag on route change),
+AudioEngine (RT spine: anchor publish → bounded drains → param tables retain
+for post-swap reapply → input consume → silence render → clock publish).
+CMake dawcore target now lists the engine .cpp files.
+
+**Original feature-3 scope (kept for reference):**
 - `engine/InputJitterRing.h` — duplex input ring (same-thread, D2 policies:
   ~2-burst prime, underfill zeros+count, overfill drop-oldest+count).
 - `engine/OboeDriver.{h,cpp}` — output stream w/ callback + callback-less

@@ -184,6 +184,67 @@ classDiagram
         +readLinear(delay: float) float
         +readHermite(delay: float) float
     }
+    %% ---- M0 engine/ (NEW ENGINE - driver + callback spine) ----
+    class StreamTime {
+        <<per-callback DAC anchor from Oboe stream timestamps>>
+        +int64_t framePosition
+        +int64_t monotonicNanos
+        +bool valid
+    }
+    class RenderSink {
+        <<abstract>>
+        +render(outputs, numFrames <= kMaxBlock, input: InputJitterRing, time: StreamTime)*
+    }
+    class InputJitterRing {
+        <<duplex input smoothing: 2-burst prime, zero-fill underfill, drop-oldest overfill, counters>>
+        +prepare(capacityFrames, channels, primeFrames)
+        +push(interleaved, frames)
+        +consume(deinterleaved, frames)
+        +primed() bool
+    }
+    class OboeDriver {
+        <<output-driven full duplex per D2: output stream w/ callback (LowLatency, Exclusive->Shared, native rate), callback-less input matched+2x capacity, non-blocking drain, sub-chunks bursts to kMaxBlock, latency reports, reopen flag on route change>>
+        +open(sink: RenderSink, cfg: Config) bool
+        +start() bool
+        +stop()
+        +close()
+        +sampleRate() double
+        +outputLatencyMs() double
+        +inputLatencyMs() double
+        +xrunCount() int32_t
+        +needsReopen() bool
+        +onAudioReady(stream, audioData, numFrames) DataCallbackResult
+    }
+    class TransportClockData {
+        <<per-block transport snapshot published via Seqlock>>
+        +int64_t samplePos
+        +double beat
+        +double bpm
+        +uint32_t flags
+    }
+    class AudioEngine {
+        <<facade + RT callback spine: anchor publish -> bounded ring drains -> param-table drain (values retained for post-swap reapply) -> input consume -> render (silence until M2 graph) -> clock publish. Seams open for TransportEngine (M1), PlaybackGraph (M2), instruments (M4)>>
+        +start(cfg: OboeDriver.Config) bool
+        +stop()
+        +jniEvents() EventRing
+        +jniParams() ParamMoveTable
+        +midiEvents() EventRing
+        +midiParams() ParamMoveTable
+        +popMeter(out: MeterFrame) bool
+        +clock() TransportClockData
+        +anchor() TimeAnchor
+        +render(outputs, numFrames, input, time)
+    }
+
+    RenderSink <|-- AudioEngine
+    OboeDriver ..> RenderSink
+    OboeDriver *-- InputJitterRing
+    AudioEngine *-- OboeDriver
+    AudioEngine *-- ParamMoveTable
+    AudioEngine ..> EngineMessage
+    AudioEngine ..> MeterFrame
+    AudioEngine ..> TimeAnchor
+
     %% ==========================================
     %% 2. APP ENTRY POINT & WORKSPACE SCREENS (EARTH.DESIGN)
     %% ==========================================

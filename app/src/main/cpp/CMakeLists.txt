@@ -23,7 +23,9 @@ target_include_directories(dawcore_core INTERFACE ${CMAKE_CURRENT_SOURCE_DIR})
 
 if(ANDROID)
     add_library(dawcore SHARED
-        # jni/ and engine/ translation units land here from M0 onward.
+        engine/OboeDriver.cpp
+        engine/AudioEngine.cpp
+        # jni/ translation units land here next (M0 feature 4).
         )
     target_link_libraries(dawcore PRIVATE dawcore_core)
     # Oboe arrives via prefab dependency when Gradle wiring is enabled:
