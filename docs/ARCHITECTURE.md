@@ -184,6 +184,10 @@ classDiagram
         +readLinear(delay: float) float
         +readHermite(delay: float) float
     }
+    class SincResampler {
+        <<[non-RT] offline windowed-sinc resampler (M5) - the D5 conform-at-load path (SampleCache resamples decoded audio ONCE to device rate so RT playback is a plain read). Kaiser beta 9 (~90dB stopband), 32 taps x 256 phases with linear phase interp (wrap straddle reaches the previous tap slot at frac=1), transition band scaled to the OUTPUT Nyquist when downsampling, per-phase DC normalization; cutoff-keyed table cache is mutex-guarded with realloc-stable entries>>
+        +process(in, inFrames, inRate, outRate)$ vector~float~
+    }
     %% ---- M1 sequencer/ (time system: TempoMap + TransportEngine) ----
     class TempoSegment {
         <<piecewise-linear map atom; ramps/curves densified into these by the builder>>
@@ -767,6 +771,35 @@ classDiagram
     MetronomeNode ..> TransportSpan
     MetronomeNode ..> TempoMap
     AudioEngine *-- MetronomeNode
+
+    %% ---- M5 media/ (sample foundation - IN PROGRESS: SampleCache + decoder TU next) ----
+    class SampleBuffer {
+        <<resident decoded audio, channel-planar, capped stereo; carries the CONFORMED rate (cache key half) + source rate (D5 bookkeeping); cache-internal refcount + LRU tick. Owned by SampleCache; evictable only at refs==0, deallocated ONLY inside cache sweeps on non-RT threads>>
+        +FileId fileId
+        +double sampleRate / sourceRate
+        +int channels / int64_t frames
+        +channel(ch) float*
+        +bytes() size_t
+    }
+    class SampleHandle {
+        <<copyable pin on a cache entry (CONTRACTS seam 3: NodeState blocks carry these, never raw pointers into evictable memory). While any handle lives the entry cannot be evicted; the destructor is a plain atomic decrement - RT-safe as a belt, never frees (reaching zero only makes the entry evictABLE for a later sweep)>>
+        +get() SampleBuffer*
+        +reset()
+    }
+    class DecodeResult {
+        <<whole-file decode product: ok/error (static string), source rate, capped channels, planar floats>>
+        +bool ok
+        +double sampleRate
+        +int channels / int64_t frames
+        +vector~float~ planar
+    }
+    class AudioFileDecoder {
+        <<[non-RT] whole-file decode to float PCM: format sniffed from content magic (RIFF/WAVE, fLaC, ID3/MPEG sync, ftyp), never the extension; WAV/FLAC/MP3 via vendored dr_libs (PD/MIT-0, single implementation TU = AudioFileDecoder.cpp, headers land with the first compile milestone), AAC/M4A via NdkMediaExtractor+Codec (Android-only; host builds report unsupported). Channels capped at first two; planar output matches SampleBuffer>>
+        +decodeFile(path)$ DecodeResult
+    }
+
+    SampleHandle ..> SampleBuffer
+    AudioFileDecoder ..> DecodeResult
 
     %% ---- M2 graph/ (strips + meters) ----
     class TrackStrip {

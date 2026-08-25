@@ -6,6 +6,34 @@ Newest entry first. Each entry: where the build stands, what comes next.
 
 ---
 
+## 2026-08-25 — M5 feature 1 checkpoint: sample-foundation headers (IN PROGRESS)
+
+Mid-feature checkpoint (user interaction pause; committed clean with the
+map already synced). Landed, each reread:
+
+- media/SampleBuffer.h: resident planar audio + refcounted SampleHandle
+  (seam-3 rule: NodeState carries handles, never raw pointers). Lifetime
+  protocol: evictable only at refs==0; deallocation ONLY in cache sweeps
+  on non-RT threads; handle dtor = atomic decrement (RT-safe belt).
+- dsp/SincResampler.h: offline Kaiser-windowed sinc (beta 9, 32 taps x 256
+  phases, linear phase interp; downsampling low-passes to OUTPUT Nyquist;
+  per-phase DC normalization) - the D5 conform-at-load path. Reread caught
+  the phase-wrap straddle reaching the WRONG tap slot (t+1 instead of t-1)
+  and an unguarded static table cache (now mutex + realloc-stable).
+- media/AudioFileDecoder.h: decode seam - magic-sniffed WAV/FLAC/MP3 via
+  vendored dr_libs (headers land at the first compile milestone;
+  AudioFileDecoder.cpp will be their single implementation TU) + Android
+  MediaCodec AAC; planar capped-stereo output.
+
+**Next (rest of this feature):** AudioFileDecoder.cpp (dr_libs dispatch +
+NdkMediaExtractor/Codec AAC loop), media/SampleCache.{h,cpp} (budgeted by
+device tier per blueprint table, (fileId, conformedRate) keys, LRU over
+refs==0 byte-weighted, loads under mutex on worker threads, conform via
+SincResampler), CMakeLists additions (+mediandk link note), map + sweep +
+BUILD_LOG, commit. Then DrumRack/DrumPadSampler/StepSequencerCore.
+
+---
+
 ## 2026-08-25 — M4 COMPLETE: launch-minimal SessionPlayer — the session grid plays
 
 M4's finale: session clips launch, loop, stop and hand tracks back to the
