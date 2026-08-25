@@ -6,6 +6,31 @@ Newest entry first. Each entry: where the build stands, what comes next.
 
 ---
 
+## 2026-08-25 — Review gate cycle 1 CLOSED: PASS. PR #8 merged; specs re-confirmed
+
+The reviewer re-verified every cycle-1 fix in code (including
+cross-checking EngineController/EngineReadback threading to confirm the
+telemetry relocation is race-free) and returned VERDICT: PASS with one
+non-blocking NIT (upstream commit SHA in dr_libs VENDOR.md - TODO noted
+in the manifest; the fetch env has no GitHub API access). CI went green
+in the same window (run #25 first full NDK build, #26 on the fixes, #27
+post-merge on main) and the user MERGED PR #8 - the engine is compiled,
+reviewed, and on main.
+
+Also this entry: the user re-uploaded both spec blueprints - verified
+BYTE-IDENTICAL to docs/spec/SPEC_PART1_FUNCTIONAL.md and
+SPEC_PART2_WORKFLOW.md (already vendored since Phase A; no change).
+WORKFLOW.md gains step 0: consult the specs before every feature (they
+are the read-only product authority; spec wins over blueprint on
+conflict), and the review gate's judging authorities now name them.
+
+**Next: M5 finale** — the sample-assignment wire + PreviewPlayer
+audition (spec 2.3/12: preview sounds, load samples into sampler/pads),
+so SimpleSampler and DrumPad Sample mode can actually load audio now
+that the engine runs on device. Review gate cycle 2 covers it.
+
+---
+
 ## 2026-08-25 — Review gate cycle 1: FAIL -> all findings fixed (resubmitted)
 
 First run of the new HARD review rule (AAA DSP+Android reviewer agent,

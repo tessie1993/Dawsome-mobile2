@@ -7,9 +7,16 @@ map; `docs/BUILD_LOG.md` is the newest-first hand-off record.
 
 ## Per-feature loop
 
-1. **Think + research first.** Before each feature: understand what it is
-   and does, then search online DSP codebases / C++ audio literature for
-   the best approach, algorithms and libraries.
+0. **Check the specs first.** Before each feature, re-read the relevant
+   sections of `docs/spec/SPEC_PART1_FUNCTIONAL.md` and
+   `docs/spec/SPEC_PART2_WORKFLOW.md` — they are the READ-ONLY product
+   authority (user-uploaded; never edited) that the blueprint and
+   contracts derive from. The feature's scope, rules and acceptance
+   behavior come from there; when blueprint and spec seem to disagree,
+   the spec wins and the discrepancy is raised.
+1. **Think + research.** Understand what the feature is and does, then
+   search online DSP codebases / C++ audio literature for the best
+   approach, algorithms and libraries.
 2. **Build class by class.** Before each class pick the best approach.
    Elegant OOP, Android best practices, high-performance audio quality.
    Features stay cohesive — shared infrastructure over silos.
@@ -30,6 +37,8 @@ Between each commit, a **reviewer agent** — expert-level DSP + Android
 application developer, AAA bar — reviews the work:
 
 - The reviewer READS the work only: no compiling, no testing, no builds.
+- The reviewer judges against the specs (`docs/spec/SPEC_PART1_*.md`,
+  `SPEC_PART2_*.md`), the blueprint and CONTRACTS.md.
 - It gives harsh, specific feedback; the builder uses it to understand
   each mistake and why, and improves the work.
 - **Only a PASS from the reviewer allows the commit / continuing.**
