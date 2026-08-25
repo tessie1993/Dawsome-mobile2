@@ -344,7 +344,12 @@ void GraphBuilder::buildGraph() {
                 }
                 g->resolver.add(duid, kh, dev.get(), pi);
             }
-            if (DeviceNode* old = findPrev(duid, 0))
+            // Device adopt identity carries the TYPE: a same-uid type swap
+            // must never migrate one synth's Shared POD into another's
+            // layout (state versions are per-type, so cross-type version
+            // equality is meaningless).
+            const uint64_t dhash = uint64_t(md->type);
+            if (DeviceNode* old = findPrev(duid, dhash))
                 g->migration.add(dev.get(), old, dev->stateBytes());
             // Instrument wiring: ledger admission + group registration
             // (registry's isInstrument makes the static_cast safe, no RTTI).
@@ -354,7 +359,7 @@ void GraphBuilder::buildGraph() {
                 inst->setVoiceAdmission(&admitFromLedger, &g->voices);
                 g->voices.registerGroup(inst->voiceGroup());
             }
-            g->nodeIndex.push_back({duid, dev.get(), 0});
+            g->nodeIndex.push_back({duid, dev.get(), dhash});
             chain->addDevice(duid, dev.get(), !md->enabled);
             g->nodes.push_back(std::move(dev));
         }

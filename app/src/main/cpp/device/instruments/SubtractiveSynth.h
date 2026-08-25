@@ -1,17 +1,12 @@
 #pragma once
 
-#include <cstring>
-
-#include "../../core/EngineConfig.h"
 #include "../../dsp/AdsrEnvelope.h"
 #include "../../dsp/DspMath.h"
 #include "../../dsp/Lfo.h"
 #include "../../dsp/NoiseGen.h"
 #include "../../dsp/Oscillator.h"
 #include "../../dsp/SvfFilter.h"
-#include "../InstrumentNode.h"
-#include "../QualityMode.h"
-#include "../VoiceAllocator.h"
+#include "../PolyInstrument.h"
 
 // The first instrument (M4 "first sound"; blueprint device/instruments/
 // SubtractiveSynth). Classic virtual-analog voice, per the researched
@@ -203,48 +198,13 @@ inline constexpr ParamDescriptor kSubtractiveParams[] = {
     {"quality", "Quality", 0, 2, 1, ParamDescriptor::Curve::Switch, "", 0, true, true, true},
 };
 
-class SubtractiveSynth final : public InstrumentNode {
+class SubtractiveSynth final
+    : public PolyInstrument<SubtractiveVoice, SubtractiveShared,
+                            /*StateVersion=*/1, /*PoolVoices=*/16,
+                            /*DefaultPolyphony=*/8> {
 public:
-    static constexpr uint16_t kStateVersion = 1;
-    static constexpr int kPoolVoices = 16;
     static constexpr int kParamCount =
         static_cast<int>(sizeof(kSubtractiveParams) / sizeof(kSubtractiveParams[0]));
-
-    // ---- DeviceNode ---------------------------------------------------------
-
-    void prepare(double sampleRate, int maxBlock) override {
-        (void)maxBlock;
-        rate_ = sampleRate;
-        for (auto& slot : voices_) slot.voice.prepare(sampleRate);
-        voices_.setPolyphony(8);
-    }
-
-    void process(ProcessContext& ctx) override {
-        float* l = ctx.outputs[0];
-        float* r = ctx.numChannels > 1 ? ctx.outputs[1] : ctx.outputs[0];
-        const MidiEvent* ev = ctx.midiIn != nullptr ? ctx.midiIn->begin() : nullptr;
-        const MidiEvent* evEnd = ctx.midiIn != nullptr ? ctx.midiIn->end() : nullptr;
-
-        int cursor = 0;
-        while (cursor < ctx.numFrames) {
-            while (ev != evEnd && ev->sampleOffset <= cursor) {
-                handleEvent(*ev);
-                ++ev;
-            }
-            int next = ctx.numFrames;
-            if (ev != evEnd && ev->sampleOffset < next) next = ev->sampleOffset;
-            const int m = next - cursor;
-            if (m > 0) {
-                renderVoices(l + cursor, r + cursor, m);
-                cursor = next;
-            }
-        }
-        while (ev != evEnd) { handleEvent(*ev); ++ev; }   // block-end events
-    }
-
-    void reset() override { voices_.killAll(); }
-
-    int latencySamples() const override { return 0; }
 
     int paramCount() const override { return kParamCount; }
 
@@ -268,70 +228,6 @@ public:
         if (denseIndex >= 0 && denseIndex < kParamCount)
             *fields[denseIndex] = plain;
     }
-
-    size_t stateBytes() const override { return sizeof(SubtractiveShared); }
-
-    void saveState(NodeState& out) const override {
-        out.hdr.version = kStateVersion;
-        out.hdr.sizeBytes = sizeof(SubtractiveShared);
-        out.hdr.flags = 0;
-        std::memcpy(out.body, &shared_, sizeof shared_);
-    }
-
-    bool loadState(const NodeState& in) override {
-        if (in.hdr.version != kStateVersion ||
-            in.hdr.sizeBytes != sizeof(SubtractiveShared) || in.body == nullptr)
-            return false;
-        std::memcpy(&shared_, in.body, sizeof shared_);
-        return true;
-    }
-
-    // ---- VoiceInterface (live input path: note number keys the voice) -------
-    void noteOn(int note, float velocity, const MpeNoteState&) override {
-        noteOnId(static_cast<uint32_t>(note), static_cast<uint16_t>(note & 0x7F), velocity);
-    }
-    void noteOff(int note, float) override {
-        voices_.noteOff(static_cast<uint32_t>(note));
-    }
-    void allNotesOff() override { voices_.allNotesOff(); }
-    void stealVoices(int count) override { voices_.stealVoices(count); }
-
-    // ---- InstrumentNode -----------------------------------------------------
-    VoiceGroup* voiceGroup() override { return &voices_; }
-
-    uint32_t budgetRefusals() const noexcept { return budgetRefusals_; }
-
-private:
-    void handleEvent(const MidiEvent& e) noexcept {
-        switch (static_cast<MidiEventType>(e.type)) {
-            case MidiEventType::NoteOn:
-                noteOnId(e.noteId, e.pitch,
-                         static_cast<float>(e.velocity) * (1.0f / 127.0f));
-                break;
-            case MidiEventType::NoteOff:
-                voices_.noteOff(e.noteId);
-                break;
-        }
-    }
-
-    void noteOnId(uint32_t noteId, uint16_t pitch, float velocity01) noexcept {
-        if (!admitVoice()) {
-            ++budgetRefusals_;
-            return;
-        }
-        if (auto* slot = voices_.acquire(noteId))
-            slot->voice.start(pitch, velocity01, shared_);
-    }
-
-    void renderVoices(float* l, float* r, int n) noexcept {
-        for (auto& slot : voices_)
-            if (slot.voice.active()) slot.voice.renderAdd(l, r, n, shared_);
-    }
-
-    double rate_ = 48000.0;
-    SubtractiveShared shared_;
-    VoiceAllocator<SubtractiveVoice, kPoolVoices> voices_;
-    uint32_t budgetRefusals_ = 0;
 };
 
 } // namespace daw

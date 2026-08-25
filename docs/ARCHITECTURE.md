@@ -630,6 +630,17 @@ classDiagram
         +setVoiceAdmission(fn, ctx)
         +voiceGroup() VoiceGroup*
     }
+    class PolyInstrument~VoiceT_SharedT_StateVersion_PoolVoices_DefaultPolyphony~ {
+        <<template shell every polyphonic instrument derives from: owns the VoiceAllocator, the sample-accurate event-split process loop over ctx.midiIn (scheduler instance ids key the allocator), ledger admission before every allocation (budgetRefusals counter), the seam-1 live interface (note number -> voice id), and SharedT-POD save/load (shared params migrate; sounding voices reset on structural rebuilds - deferred polish, BUILD_LOG). Concrete synths supply VoiceT + SharedT + the descriptor trio (paramCount/paramDescriptor/setParamImmediate)>>
+        +prepare(sampleRate, maxBlock)
+        +process(ctx)
+        +reset() / latencySamples()
+        +saveState(out) / loadState(in)
+        +noteOn(note, velocity, mpe) / noteOff / allNotesOff / stealVoices
+        +voiceGroup() VoiceGroup*
+        #handleEvent(e) / noteOnId(id, pitch, vel01) / renderVoices(l, r, n)
+        #SharedT shared_
+    }
     class SubtractiveShared {
         <<POD settings the voices read = the synth's migrating state body: osc waves/detune/semi/mix, noise, cutoff/res/envAmount(oct)/keyTrack, amp+filter ADSR, LFO rate/toPitch/toCutoff, velocity depths, quality>>
     }
@@ -642,25 +653,75 @@ classDiagram
         +beginRelease() / fastRelease() / kill()
     }
     class SubtractiveSynth {
-        <<the first instrument (DeviceTypeId 0): InstrumentNode over VoiceAllocator (pool 16, poly 8); process consumes ctx.midiIn sample-accurately (block split at event offsets; scheduler instance ids key the allocator; the seam-1 live interface maps note number -> id); admission asks the ledger; 24 contract descriptors (kSubtractiveParams). Migration: shared params migrate; sounding voices reset on structural rebuilds (full voice adoption deferred, BUILD_LOG)>>
-        +process(ctx)
+        <<the first instrument (DeviceTypeId 0): PolyInstrument of SubtractiveVoice/SubtractiveShared (pool 16, poly 8); 24 contract descriptors (kSubtractiveParams)>>
+        +paramCount() / paramDescriptor(i)
         +setParamImmediate(dense, plain)
-        +noteOn(note, velocity, mpe) / noteOff / allNotesOff / stealVoices
-        +voiceGroup() VoiceGroup*
-        +saveState(out) / loadState(in)
+    }
+    class WavetableBank {
+        <<process-global GENERATED table set (no assets): 8 morph frames (sine/tri/saw/square/bright/metallic/organ/formant) x 8 mips x 2048, built additively with per-mip harmonic caps (128 >> mip, the classic anti-aliasing ladder) at registration [non-RT], read-only afterwards - RT reads need no lifetime protocol. One gain per frame from the full-res mip keeps level continuous across mip crossings>>
+        +instance() WavetableBank&
+        +mipForInc(phaseInc) int
+        +sample(frame, mip, phase) float
+    }
+    class WavetableShared {
+        <<POD settings/migrating state body: position + posEnv/posLfo morph depths, cutoff/res/envOct/keyTrack, amp+filter ADSR, LFO rate/toPitch, velocity depths, quality>>
+    }
+    class WavetableVoice {
+        <<table read (linear phase interp + linear frame morph, nearest mip) -> Simper SVF lowpass -> amp ADSR; the position knob morphs across frames swept by its own envelope and the LFO (the signature wavetable move); filter/LFO/pitch/position at control rate 16; same VoiceT contract (transient window, steal fade)>>
+        +prepare / start / renderAdd
+        +active() / releasing() / level() / inTransientWindow()
+        +beginRelease() / fastRelease() / kill()
+    }
+    class WavetableSynth {
+        <<DeviceTypeId 1 "Wavetable Lab" - the default project's lead: PolyInstrument of WavetableVoice/WavetableShared (pool 16, poly 8); 20 contract descriptors (kWavetableParams)>>
+        +paramCount() / paramDescriptor(i)
+        +setParamImmediate(dense, plain)
+    }
+    class FmAlgorithm {
+        <<topology POD: modSources[op] = bitmask of ops phase-modulating `op` (masks only reference HIGHER ops so 3->0 compute order always has modulators ready), carriers = bitmask summed to output. kFmAlgorithms = the classic eight (stack, 2-into-1, two stacks, branched, bright bell, mostly-additive, two pairs, organ)>>
+        +uint8_t modSources[4]
+        +uint8_t carriers
+    }
+    class FmShared {
+        <<POD settings/migrating state body: algorithm, op3 feedback, per-op ratio/level/ADSR arrays, LFO rate/toPitch, velToAmp + velToMod (velocity scales modulator levels = brightness), quality>>
+    }
+    class FmVoice {
+        <<4-op phase modulation (DX lineage): per-op sine at audio-rate with its OWN audio-rate ADSR (FM timbre IS the envelope motion), kModDepth 2pi, op3 one-sample-delayed self-feedback, carrier sum normalized by carrier count; algorithm latched at note start; carrier envelopes gate voice life; LFO/pitch at control rate 16>>
+        +prepare / start / renderAdd
+        +active() / releasing() / level() / inTransientWindow()
+        +beginRelease() / fastRelease() / kill()
+    }
+    class FmSynth {
+        <<DeviceTypeId 2 "FM Four": PolyInstrument of FmVoice/FmShared (pool 16, poly 8); 31 contract descriptors (kFmParams)>>
+        +paramCount() / paramDescriptor(i)
+        +setParamImmediate(dense, plain)
     }
 
     DeviceNode <|-- InstrumentNode
     VoiceInterface <|-- InstrumentNode
-    InstrumentNode <|-- SubtractiveSynth
+    InstrumentNode <|-- PolyInstrument~VoiceT_SharedT_StateVersion_PoolVoices_DefaultPolyphony~
+    PolyInstrument~VoiceT_SharedT_StateVersion_PoolVoices_DefaultPolyphony~ <|-- SubtractiveSynth
+    PolyInstrument~VoiceT_SharedT_StateVersion_PoolVoices_DefaultPolyphony~ <|-- WavetableSynth
+    PolyInstrument~VoiceT_SharedT_StateVersion_PoolVoices_DefaultPolyphony~ <|-- FmSynth
+    PolyInstrument~VoiceT_SharedT_StateVersion_PoolVoices_DefaultPolyphony~ ..> VoiceAllocator~VoiceT_MaxVoices~
     SubtractiveSynth *-- SubtractiveVoice
     SubtractiveSynth *-- SubtractiveShared
-    SubtractiveSynth ..> VoiceAllocator~VoiceT_MaxVoices~
     SubtractiveVoice ..> Oscillator
     SubtractiveVoice ..> SvfFilter
     SubtractiveVoice ..> AdsrEnvelope
     SubtractiveVoice ..> Lfo
     SubtractiveVoice ..> NoiseGen
+    WavetableSynth *-- WavetableVoice
+    WavetableSynth *-- WavetableShared
+    WavetableVoice ..> WavetableBank
+    WavetableVoice ..> SvfFilter
+    WavetableVoice ..> AdsrEnvelope
+    WavetableVoice ..> Lfo
+    FmSynth *-- FmVoice
+    FmSynth *-- FmShared
+    FmVoice ..> FmAlgorithm
+    FmVoice ..> AdsrEnvelope
+    FmVoice ..> Lfo
     MidiScheduler ..> MidiTrackRun
     PlaybackGraph ..> MidiTrackRun
 
@@ -774,7 +835,7 @@ classDiagram
 
     %% ---- M1 graph/ (GraphBuilder - the background compile thread) ----
     class GraphBuilder {
-        <<owns EngineModel + the compile thread (50ms wait_for cycle): drains ModelDelta bundle inbox (mutex+condvar; single engine-io producer preserves edit order), applies deltas, rebuilds dirty artifacts - TimelineSnapshot (exact-reserve flat stores), TempoMapBase from model tempo deltas (rate-gated, retried) or forced tail consolidation (samples the SAME governing function at boundary beats; equal-tempo merges preserve post-seek discontinuities; skipped while an offer is in flight). All handovers via OfferSlot epochs; only this thread frees retired artifacts (after RT ack; tempo bg pointer republished once predecessor ack proves the claim). PlaybackGraph compile joins at M2>>
+        <<owns EngineModel + the compile thread (50ms wait_for cycle): drains ModelDelta bundle inbox (mutex+condvar; single engine-io producer preserves edit order), applies deltas, rebuilds dirty artifacts - TimelineSnapshot (exact-reserve flat stores), TempoMapBase from model tempo deltas (rate-gated, retried) or forced tail consolidation (samples the SAME governing function at boundary beats; equal-tempo merges preserve post-seek discontinuities; skipped while an offer is in flight). All handovers via OfferSlot epochs; only this thread frees retired artifacts (after RT ack; tempo bg pointer republished once predecessor ack proves the claim). Device adopt entries hash their TYPE - a same-uid type swap never migrates one synth's Shared POD into another's layout (per-type state versions make cross-type version equality meaningless). PlaybackGraph compile joins at M2>>
         +start()
         +stop()
         +submitDeltas(payload, len)

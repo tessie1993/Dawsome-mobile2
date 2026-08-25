@@ -6,6 +6,50 @@ Newest entry first. Each entry: where the build stands, what comes next.
 
 ---
 
+## 2026-08-25 — M4 feature 3 done: WavetableSynth + FmSynth on the new PolyInstrument shell
+
+The default project's LEAD now sounds (Wavetable Lab, DeviceTypeId 1) and
+all three M4 synths are registered — the instrument wave is complete up to
+the launch-minimal SessionPlayer.
+
+- device/PolyInstrument.h NEW: the polyphonic-instrument template shell
+  (VoiceT, SharedT, StateVersion, PoolVoices, DefaultPolyphony). Owns the
+  VoiceAllocator, the sample-accurate event-split process loop, ledger
+  admission (+budgetRefusals counter), the seam-1 live note->id mapping and
+  SharedT-POD save/load. Concrete synths carry ONLY their DSP + the
+  descriptor trio. SubtractiveSynth refactored onto it (no behavior change).
+- device/instruments/WavetableSynth.h: WavetableBank — GENERATED global
+  table set (8 morph frames x 8 mips x 2048, additive with per-mip harmonic
+  caps 128>>mip; ~4M sin at startup, forced NON-RT in
+  registerBuiltinDevices so the lazy static never initializes on the audio
+  thread). One gain per frame from the full-res mip keeps level continuous
+  across mip crossings (per-mip peak normalization would step the
+  fundamental — caught on reread). Voice: frame-morph table read (linear
+  phase + frame interp, nearest mip) -> SVF LP -> amp ADSR; position swept
+  by filter env + LFO; control-rate 16. 20 descriptors (kWavetableParams).
+- device/instruments/FmSynth.h: 4-op phase-mod, kFmAlgorithms[8]
+  (modSources bitmasks reference only HIGHER ops; 3->0 compute order),
+  per-op AUDIO-RATE ADSRs (FM timbre is the envelope motion), op3
+  one-sample-delayed self-feedback, kModDepth 2pi, carrier-count
+  normalization, velToMod scales modulator levels. Algorithm latched at
+  note start; carrier envelopes gate voice life. 31 descriptors (kFmParams).
+- RegisterBuiltins.cpp registers types 1+2 and touches
+  WavetableBank::instance().
+- GraphBuilder seam-3 hardening (from the data-flow walk): device adopt
+  entries now hash their TYPE — a same-uid type swap previously matched
+  configHash 0 and relied on sizeof(SharedT) inequality to refuse
+  cross-type adoption; now refused by identity.
+- Kotlin side needed nothing: deviceTypeWire already froze 1/2, DeviceModel
+  params default empty => C++ descriptor defaults; editor UIs will dispatch
+  descriptor keys ("wt.position") when they land.
+- Map: 183 classes, sweep green both directions.
+
+**Next: M4 finale** — minimal SessionPlayer/launch (blueprint §11 M4: slot
+trigger -> quantized clip start feeding MidiScheduler), then M5 drums &
+sampling.
+
+---
+
 ## 2026-08-25 — M4 feature 1 done: SubtractiveSynth — FIRST SOUND path
 
 The full audible loop exists (pending compile): PLAY -> MidiScheduler runs
