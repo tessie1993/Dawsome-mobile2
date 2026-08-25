@@ -6,6 +6,39 @@ Newest entry first. Each entry: where the build stands, what comes next.
 
 ---
 
+## 2026-08-25 — M5 feature 1 done: media foundation (decoder + SampleCache)
+
+Completes what the checkpoint below started. New standing cadence from the
+user: map updates land per class-batch (not only at feature end), and the
+turn PAUSES after each feature commit so the repo can be merged on GitHub.
+PR #6 is open with everything M0->M5f1.
+
+- media/AudioFileDecoder.cpp: dr_libs implementation TU (WAV incl. RF64,
+  FLAC, MP3 - full-file f32 reads, planar capped-stereo conversion) +
+  Android NdkMediaExtractor/Codec AAC loop (16-bit PCM drain, format-change
+  re-read, EOS handling; reread added the codec-error/dry-poll bailout and
+  partial-output refusal). Content-magic sniff, never extensions.
+- media/SampleCache.{h,cpp}: budgeted resident store, keys
+  (fileId, conformedRate) per D5; decode+conform OUTSIDE the mutex with
+  double-check reinsert (losers adopt the winner); byte-weighted LRU over
+  refs==0, pinned entries untouchable (overrun counted, never forced);
+  erase-in-sweep is the only deallocation site. Handle-pin vs sweep race
+  closed by construction (pins under mutex; copies need a live pin; dtor
+  release pairs with sweep acquire).
+- CMakeLists: media TUs added; compile-milestone notes for the dr_libs
+  vendor step + mediandk link.
+- Data-flow walk: pad trigger (M5f2) -> builder-thread acquire at device
+  rate -> handle lives in the node (seam 3) -> RT reads planar through the
+  pin; rate reopen re-acquires at the new rate, old conforms age out.
+- Map: 191 classes, sweep green both directions.
+
+**Next: M5 feature 2** — DrumPadSampler (sample playback voice + the
+sub/noise/FM/ring/bit drum-synth modes per spec) + DrumRackDevice (16-pad
+rack, pad = chain slot, choke groups), registered as DeviceTypeId 6/7
+wiring per registry. Then StepSequencerCore + SimpleSampler.
+
+---
+
 ## 2026-08-25 — M5 feature 1 checkpoint: sample-foundation headers (IN PROGRESS)
 
 Mid-feature checkpoint (user interaction pause; committed clean with the

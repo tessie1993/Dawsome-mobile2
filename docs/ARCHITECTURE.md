@@ -798,8 +798,22 @@ classDiagram
         +decodeFile(path)$ DecodeResult
     }
 
+    class SampleCache {
+        <<budgeted resident sample store (D5): keys (fileId, conformedRate) - each requested rate gets its own copy conformed ONCE at load via SincResampler, so RT playback is a plain read. All methods [non-RT] mutex-guarded; decode+conform run OUTSIDE the lock with a double-check reinsert race guard (losers adopt the winner). Eviction: byte-weighted LRU over refs==0 until under budget; pinned entries untouchable (unreachable budget = counted overrun, never forced); erase in sweep is the ONLY deallocation site. Budget = blueprint device tier (256/512/768 MB), Kotlin sets it at engine start>>
+        +instance()$ SampleCache&
+        +acquire(id: FileId, path, targetRate) SampleHandle
+        +peek(id: FileId, targetRate) SampleHandle
+        +setBudget(bytes) / sweep()
+        +residentBytes() / entryCount()
+        +decodeFailures() / budgetOverruns()
+    }
+
     SampleHandle ..> SampleBuffer
     AudioFileDecoder ..> DecodeResult
+    SampleCache *-- SampleBuffer
+    SampleCache ..> SampleHandle
+    SampleCache ..> AudioFileDecoder
+    SampleCache ..> SincResampler
 
     %% ---- M2 graph/ (strips + meters) ----
     class TrackStrip {
