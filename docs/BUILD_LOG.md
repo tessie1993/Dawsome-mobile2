@@ -6,6 +6,29 @@ Newest entry first. Each entry: where the build stands, what comes next.
 
 ---
 
+## 2026-08-25 — Review cycle 3 re-verdict: PASS + interim membership-diff fix
+
+Reviewer verified all eight cycle-3 fixes in the code at e4a5d12 and
+passed the slice, with one remaining non-blocking MINOR: undo of the new
+Simpler-on-drop LOAD landed in the documented membership hole - the
+inserted sampler survived engine-side (audibly) because the null-action
+resync is upserts-only and the ghost device's uid gets no frames. The
+reviewer offered document-or-fix; TOOK THE FIX (their sketch): the
+undo/redo push now carries a PRE->POST membership diff
+(EngineSync.encodeMembershipRemovals) emitting explicit removes for
+every track/device/clip/scene the state change removed, in the same
+bundle the upserts follow - closes the whole ghost-entity class on the
+undo path one step deep (LOAD->undo, AddTrack->undo, clip add->undo).
+SampleRef removes on removal paths are now unconditional (16B; the
+engine map may hold entries this side's snapshot no longer shows).
+Divergence older than one step (missed bundles) still waits on the
+general engine-side mark-and-sweep - tracked, persistence milestone.
+
+Delta sent back for verification; on its PASS the fix slice goes up as
+the follow-up PR. STOP directive still standing: no next feature.
+
+---
+
 ## 2026-08-25 — Review cycle 3: FAIL -> all findings fixed (resubmitted)
 
 The owner merged PR #10 ahead of the verdict; the fixes land as a

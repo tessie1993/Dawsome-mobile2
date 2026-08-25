@@ -26,11 +26,13 @@ import kotlinx.coroutines.launch
  * from the store (undo/redo) and every RUNNING transition trigger a FULL
  * model push + param re-send. Deltas are idempotent, but upserts alone do
  * not reconcile SET MEMBERSHIP: sample refs are reset-then-readded per
- * device (cycle-3 fix), while a track/device/clip REMOVED by undo is not
- * yet deleted engine-side by a full push - it lives on (audibly, for a
- * track) until an explicit remove or engine restart. The general
- * membership reconciliation (engine-side mark-and-sweep against the
- * pushed set) is a TRACKED HOLE scheduled with the persistence milestone.
+ * device, and the undo/redo push carries a PRE->POST membership diff
+ * (encodeMembershipRemovals) so removed tracks/devices/clips/scenes get
+ * explicit removes - without it an undone Simpler-on-drop LOAD left a
+ * ghost sampler playing, and an undone AddTrack a ghost track (cycle-3).
+ * The diff sees exactly one step of history; divergence older than the
+ * last observed state (e.g. missed bundles) still waits on the general
+ * engine-side mark-and-sweep, TRACKED for the persistence milestone.
  * Cascading removals (track delete) derive from the PRE-change state;
  * shared ClipContent is removed only when no clip in the post-change state
  * still references it.
@@ -81,7 +83,9 @@ class EngineSync(
     // Runs on the store's dispatcher; controller calls post to engine-io.
     private fun onChange(action: ProjectAction?, state: ProjectState, editSeq: Int) {
         if (action == null) {                    // undo/redo: state is authoritative
-            pushFullModel(state, editSeq)
+            // The pre-change state rides along so the push can diff away
+            // entities the undo/redo REMOVED (see encodeMembershipRemovals).
+            pushFullModel(state, editSeq, previous = lastState)
             resendAuthoritativeParams()
             lastState = state
             return
@@ -242,8 +246,19 @@ class EngineSync(
 
     // ---- full model push ------------------------------------------------------
 
-    fun pushFullModel(state: ProjectState, editSeq: Int) {
+    /**
+     * When [previous] is given (the undo/redo path), entities it contained
+     * that [state] no longer does get EXPLICIT REMOVES ahead of the upserts,
+     * in the same bundle — the targeted interim closure of the membership
+     * hole: an undone Simpler-on-drop load, AddTrack, or clip add otherwise
+     * left its engine-side ghost playing (review cycle-3). The general
+     * engine-side mark-and-sweep (which also covers divergence OLDER than
+     * the last observed state, e.g. missed bundles) still lands with the
+     * persistence milestone.
+     */
+    fun pushFullModel(state: ProjectState, editSeq: Int, previous: ProjectState? = null) {
         val d = DeltaEncoder(editSeq)
+        if (previous != null) encodeMembershipRemovals(d, previous, state)
         d.tempoMap(listOf(0.0 to state.bpm.toDouble()), state.timeSigNum, state.timeSigDen)
         for (scene in state.scenes) {
             d.upsertScene(WireProtocol.makeNodeUid(WireProtocol.NODE_KIND_SCENE, scene.id),
@@ -252,6 +267,52 @@ class EngineSync(
         for (t in state.tracks) encodeTrackFull(d, state, t)
         encodeMaster(d, state)
         controller.sendModelDelta(d.build())
+    }
+
+    /**
+     * Membership diff PRE -> POST: explicit removes for every track, device,
+     * clip (with its content-sharing check), and scene that [pre] carried
+     * and [post] does not. Emitted into the same bundle that the upserts
+     * follow, so ghosts vanish and survivors are untouched regardless of
+     * where the builder's compile cycle falls. Cheap by construction: undo
+     * stacks are shallow and full pushes are rare.
+     */
+    private fun encodeMembershipRemovals(d: DeltaEncoder, pre: ProjectState, post: ProjectState) {
+        val postTracks = post.tracks.associateBy { it.id }
+        for (t in pre.tracks) {
+            val survivor = postTracks[t.id]
+            if (survivor == null) {
+                encodeTrackRemoval(d, post, t)
+                continue
+            }
+            for (dev in t.devices) {
+                if (survivor.devices.none { it.id == dev.id }) {
+                    val duid = WireProtocol.makeNodeUid(WireProtocol.NODE_KIND_DEVICE, dev.id)
+                    d.remove(WireProtocol.ENTITY_SAMPLE_REF, duid)
+                    d.remove(WireProtocol.ENTITY_DEVICE, duid)
+                }
+            }
+            for (c in t.arrangementClips) {
+                if (survivor.arrangementClips.none { it.id == c.id }) {
+                    d.remove(WireProtocol.ENTITY_CLIP,
+                        WireProtocol.makeNodeUid(WireProtocol.NODE_KIND_CLIP, c.id))
+                    maybeRemoveContent(d, post, contentIdOf(c.id, c.linkedSessionClipId))
+                }
+            }
+            for (c in t.sessionClips) {
+                if (survivor.sessionClips.none { it.id == c.id }) {
+                    d.remove(WireProtocol.ENTITY_CLIP,
+                        WireProtocol.makeNodeUid(WireProtocol.NODE_KIND_CLIP, c.id))
+                    maybeRemoveContent(d, post, contentIdOf(c.id, c.linkedArrangementClipId))
+                }
+            }
+        }
+        for (s in pre.scenes) {
+            if (post.scenes.none { it.id == s.id }) {
+                d.remove(WireProtocol.ENTITY_SCENE,
+                    WireProtocol.makeNodeUid(WireProtocol.NODE_KIND_SCENE, s.id))
+            }
+        }
     }
 
     private fun sendMasterUpsert(state: ProjectState, editSeq: Int) {
@@ -351,8 +412,10 @@ class EngineSync(
         }
         for (dev in gone.devices) {
             val duid = WireProtocol.makeNodeUid(WireProtocol.NODE_KIND_DEVICE, dev.id)
-            // Removal is non-cascading model-side: refs get their own remove.
-            if (dev.sampleRefs.isNotEmpty()) d.remove(WireProtocol.ENTITY_SAMPLE_REF, duid)
+            // Removal is non-cascading model-side: refs get their own remove,
+            // unconditionally - the engine's ref map may hold entries this
+            // side's snapshot no longer shows, and the empty remove is 16B.
+            d.remove(WireProtocol.ENTITY_SAMPLE_REF, duid)
             d.remove(WireProtocol.ENTITY_DEVICE, duid)
         }
         d.remove(WireProtocol.ENTITY_TRACK,
@@ -464,7 +527,7 @@ class EngineSync(
             ?.filter { old -> t.devices.none { it.id == old.id } }
             ?.forEach { gone ->
                 val duid = WireProtocol.makeNodeUid(WireProtocol.NODE_KIND_DEVICE, gone.id)
-                if (gone.sampleRefs.isNotEmpty()) d.remove(WireProtocol.ENTITY_SAMPLE_REF, duid)
+                d.remove(WireProtocol.ENTITY_SAMPLE_REF, duid)
                 d.remove(WireProtocol.ENTITY_DEVICE, duid)
             }
         // Upsert the whole chain (order is positional). Refs follow the same
