@@ -23,7 +23,6 @@ data class TransportUiState(
     val playheadBeat: Float,
     val loopStartBeat: Float,
     val loopEndBeat: Float,
-    val timecodeFormatted: String,
     val barsBeatsFormatted: String,
     val projectName: String
 )
@@ -56,12 +55,11 @@ class TransportStateHolder(
 
     companion object {
         fun createUiState(p: com.example.synth.domain.ProjectState): TransportUiState {
-            val totalSeconds = (p.playheadBeat / (p.bpm / 60.0f)).toInt()
-            val minutes = totalSeconds / 60
-            val seconds = totalSeconds % 60
-            val millis = ((p.playheadBeat % 1.0f) * 100).toInt()
-            val formatted = String.format("%02d:%02d:%02d", minutes, seconds, millis)
-
+            // No min:sec timecode here yet (review cycle-2): deriving wall time
+            // from playheadBeat/bpm is wrong once tempo maps land - when a
+            // timecode view arrives it reads the engine's sample-position
+            // readback instead.
+            //
             // Reference readout format: bars.beats.sixteenths (001.03.00).
             // playheadBeat is in QUARTER notes; a bar is num * 4/den quarters
             // (the engine's barBeats() rule) - dividing by the numerator alone
@@ -90,7 +88,6 @@ class TransportStateHolder(
                 playheadBeat = p.playheadBeat,
                 loopStartBeat = p.loopStartBeat,
                 loopEndBeat = p.loopEndBeat,
-                timecodeFormatted = formatted,
                 barsBeatsFormatted = barsBeats,
                 projectName = p.name,
                 isMetronomeOn = p.isMetronomeOn

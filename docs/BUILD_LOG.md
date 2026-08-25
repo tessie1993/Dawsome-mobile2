@@ -6,6 +6,27 @@ Newest entry first. Each entry: where the build stands, what comes next.
 
 ---
 
+## 2026-08-25 — Review cycle 2 verdict: PASS (UI conformance pass 1 gated through)
+
+Reviewer re-verified every cycle-2 fix in the code at 677ce4a ("every fix
+verified in the code, not the fix map") and passed the slice. One
+non-blocking nit remained: timecodeFormatted in TransportStateHolder was
+consumer-less (bars.beats replaced it in the transport readout) and still
+default-locale formatted. Resolution: DROPPED the field rather than pin
+Locale.ROOT - its min:sec:ms math derived wall time from playheadBeat/bpm,
+which is wrong the moment tempo maps land; when a timecode view actually
+arrives it must read the engine's sample-position readback. Removing it
+deletes a latent bug instead of preserving one.
+
+Feature complete behind the gate: Earth V2 conformance pass 1 (fonts,
+token corrections, transport bar, nav dock, metronome vertical) +
+contracts v1.2.0 vocabulary slice. PR goes up for merge; on "merged,
+continue" the branch restarts from main and M5 finale (task #29) resumes
+at the widen-the-StateCodec-gate step (DeviceSampleRefPayload schema
+first, then EngineModel/GraphBuilder consumption).
+
+---
+
 ## 2026-08-25 — Review cycle 2: FAIL -> all findings fixed (resubmitted)
 
 The gate earned its keep: the reviewer caught a REAL COMPILE BREAKER

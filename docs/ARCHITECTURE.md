@@ -1501,7 +1501,7 @@ classDiagram
     %% 5. MODULAR UI STATE HOLDERS (COMPOSE RETAINED)
     %% ==========================================
     class TransportStateHolder {
-        <<UiState adds isMetronomeOn (full vertical: ProjectState flag + ToggleMetronome action/reducer + EngineSync -> encoder metronome op -> engine MetronomeNode), barsBeatsFormatted (the reference readout's 001.03.00 bars.beats.sixteenths) and projectName>>
+        <<UiState adds isMetronomeOn (full vertical: ProjectState flag + ToggleMetronome action/reducer + EngineSync -> encoder metronome op -> engine MetronomeNode), barsBeatsFormatted (the reference readout's 001.03.00 bars.beats.sixteenths, denominator-aware, Locale.ROOT) and projectName; min:sec timecodeFormatted DROPPED (cycle-2 nit) - a future timecode view reads engine sample position, beat/bpm math breaks under tempo maps>>
         +StateFlow~TransportUiState~ state
         +play()
         +stop()
