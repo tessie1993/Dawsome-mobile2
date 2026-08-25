@@ -6,6 +6,42 @@ Newest entry first. Each entry: where the build stands, what comes next.
 
 ---
 
+## 2026-08-25 — M5 feature 2 done: DrumPadVoice + DrumRackDevice — the drum track sounds
+
+Registered DeviceTypeId 6; the default project's "16-Pad Drum Rack" now
+plays its step grid. Reinforced user rules in force: map updated per
+class-batch (two updates this feature, both swept), and the sweep script
+now ALSO detects duplicates (map blocks, relationship lines, same-name
+source declarations; forward declarations excluded) - all NONE.
+
+- device/instruments/DrumPad.h: DrumPadShared (7-field per-pad POD) +
+  DrumPadVoice - five researched modes + sample playback: Sub (single-osc
+  808 kick: exponential pitch env onto base, tanh drive), Noise (sine body
+  + SVF-filtered white, the classic snare split), Metal (TR-808 six
+  detuned squares -> highpass, inharmonic cluster), Ring (multiplied sine
+  pair), Bit (full-rate square through sample-hold decimation - reread
+  fixed pitch-follows-crush and sample-repitch-vs-root bugs), Sample
+  (cache-pinned handle, relative repitch; plumbing joins the library
+  milestone). Instant attack + declick, exp -60dB decay, 5ms fastRelease,
+  30ms transient protection.
+- device/instruments/DrumRackDevice.h: kDrumKit[16] mirrors Kotlin
+  DrumPadType in enum order (roots + choke groups + musical defaults as
+  STATE; descriptor defaults stay neutral); pitch lookup first-match
+  (PERC_2 shadows COWBELL at 56 - faithful model quirk). The rack IS its
+  VoiceGroup; note-offs ignored (one-shots); choke = fastRelease of
+  group-mates; steal candidates/order mirror VoiceAllocator exactly
+  (verified against its comparator; releasing never protected). 112
+  descriptors via per-pad macro; dense = pad*7 + field.
+- RegisterBuiltins: type 6 wired.
+- Map: 196 classes; sweep green INCLUDING the new duplicate checks.
+
+**Next: M5 feature 3** — StepSequencerCore evaluation (the drum grid is
+already flattened Kotlin-side into notes; assess what engine-side core the
+blueprint expects beyond that) + SimpleSampler (type 3) on PolyInstrument
+with SampleCache-pinned zones. Then SliceEngine + PreviewPlayer.
+
+---
+
 ## 2026-08-25 — M5 feature 1 done: media foundation (decoder + SampleCache)
 
 Completes what the checkpoint below started. New standing cadence from the
