@@ -815,6 +815,47 @@ classDiagram
     SampleCache ..> AudioFileDecoder
     SampleCache ..> SincResampler
 
+    %% ---- M5 device/instruments/ (drums) ----
+    class DrumPadShared {
+        <<per-pad settings POD: mode (Sub|Noise|Metal|Ring|Bit|Sample), levelDb, tuneSemi, decayMs, tone + shape (mode-multiplexed color/shape), chokeGroup (0 none; mirrors Kotlin DrumPadType groups)>>
+    }
+    class DrumPadVoice {
+        <<mono one-shot pad voice, five researched synth modes + sample playback: Sub = sine w/ exponential pitch env onto base (single-osc 808 kick design, tanh drive tone); Noise = sine body + SVF-filtered white (classic snare split, shape = mix); Metal = TR-808 cymbal scheme (6 detuned sign-squares summed inharmonic, highpassed; alias smear = the classic character); Ring = multiplied sine pair (cowbell family); Bit = full-rate square through sample-hold decimation + bit quantize (pitch immune to crush depth); Sample = tuned linear-interp one-shot off a cache-pinned SampleHandle (relative repitch 2^(tune/12); handle plumbing joins the media-library milestone). Instant attack + 0.5ms declick, exponential -60dB decay; retrigger hard-cuts (classic drum-machine behavior, masked by the new transient); 30ms transient window protects fresh hits; fastRelease = 5ms steal/choke ramp>>
+        +prepare(sampleRate)
+        +trigger(velocity01, rootPitch, shared, serial)
+        +setSample(h: SampleHandle)
+        +renderAdd(l, r, n)
+        +active() / releasing() / level() / inTransientWindow() / serial()
+        +beginRelease() / fastRelease() / kill()
+    }
+
+    class DrumKitDefault {
+        <<per-pad kit row: MIDI root + researched 808-style defaults (mode, level, tune, decay, tone, shape, choke). kDrumKit[16] mirrors Kotlin DrumPadType in ENUM ORDER - the wire truth EngineSync flattens steps against; PERC_2/COWBELL share pitch 56, first match wins (faithful model quirk)>>
+    }
+    class DrumRackShared {
+        <<seam-3 migrating state body: DrumPadShared pads[16], initialized from kDrumKit (musical defaults are STATE; descriptor defaults stay neutral reset values). Trivially copyable>>
+    }
+    class DrumRackDevice {
+        <<DeviceTypeId 6 "16-Pad Drum Rack" - the default project's drum track: InstrumentNode that IS its own VoiceGroup (per-pad mono voices, up to 16 sounding). Event-split sample-accurate process; NOTE-OFFS IGNORED (one-shots die by decay - honoring step clips' OFFs would chop every drum); ledger admission gates fresh triggers (retrigger reuses its slot); choke groups (nonzero, DrumPadType mirror) fastRelease group-mates on trigger; steal candidates/order mirror the allocator convention exactly (releasing never protected; releasing -> unprotected -> oldest, level tiebreak). 112 contract descriptors (kDrumRackParams: 7 per pad, "padN.mode".."padN.choke"); dense index = pad*7+field>>
+        +process(ctx)
+        +setParamImmediate(dense, plain)
+        +saveState(out) / loadState(in)
+        +noteOn(note, velocity, mpe) / noteOff(ignored) / allNotesOff
+        +voiceGroup() VoiceGroup*
+        +activeVoiceCount() / bestStealCandidate() / stealVoices(count)
+    }
+
+    DrumPadVoice ..> DrumPadShared
+    DrumPadVoice ..> SampleHandle
+    DrumPadVoice ..> NoiseGen
+    DrumPadVoice ..> SvfFilter
+    InstrumentNode <|-- DrumRackDevice
+    VoiceGroup <|-- DrumRackDevice
+    DrumRackDevice *-- DrumPadVoice
+    DrumRackDevice *-- DrumRackShared
+    DrumRackShared *-- DrumPadShared
+    DrumRackDevice ..> DrumKitDefault
+
     %% ---- M2 graph/ (strips + meters) ----
     class TrackStrip {
         <<channel strip AS a DeviceNode (resolver/migration/state uniform): volume (dB->gain at set), constant-power pan (-3dB center, per-channel gain targets), click-free mute; contract keys mixer.volume/pan/mute; gain-domain linear smoothing, current+target migrate (never-jumps); latency 0, configHash 0 (always adoptable); send levels live on SendNodes (M2 f2)>>

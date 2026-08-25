@@ -1,5 +1,6 @@
 #include "DeviceRegistry.h"
 
+#include "instruments/DrumRackDevice.h"
 #include "instruments/FmSynth.h"
 #include "instruments/SubtractiveSynth.h"
 #include "instruments/WavetableSynth.h"
@@ -25,6 +26,10 @@ std::unique_ptr<DeviceNode> makeFmSynth() {
     return std::make_unique<FmSynth>();
 }
 
+std::unique_ptr<DeviceNode> makeDrumRack() {
+    return std::make_unique<DrumRackDevice>();
+}
+
 } // namespace
 
 void registerBuiltinDevices() {
@@ -39,6 +44,9 @@ void registerBuiltinDevices() {
         r.registerType(DeviceTypeId::FmSynth, "FM Four",
                        &makeFmSynth, kFmParams,
                        FmSynth::kParamCount, /*isInstrument=*/true);
+        r.registerType(DeviceTypeId::DrumRack, "16-Pad Drum Rack",
+                       &makeDrumRack, kDrumRackParams,
+                       DrumRackDevice::kParamCount, /*isInstrument=*/true);
         // The bank behind WavetableVoice is a lazy static; touch it HERE so
         // the ~4M-sin generation runs at engine construction, never on the
         // audio thread's first render of a wavetable voice.
