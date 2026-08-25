@@ -6,6 +6,43 @@ Newest entry first. Each entry: where the build stands, what comes next.
 
 ---
 
+## 2026-08-25 (later still) — M0 COMPLETE (feature 4: the JNI seam)
+
+Engine foundation milestone done. Feature 4 delivered the full Kotlin <-> C++
+seam per CONTRACTS.md seam 5:
+
+- `cpp/jni/` — CommandCodec (pure, visitor-driven frame decoder; record-
+  granular backpressure; unknown kinds skipped), StateCodec (contract-ordered
+  16-byte entity-delta framing, field-wise reads for the unaligned u64;
+  consumer = the M1 builder), ReadbackWire (frozen 80-byte EngineStatusWire +
+  meter wire doc), NativeAudioBridge.cpp (the ONLY jni.h TU: RegisterNatives
+  from JNI_OnLoad, jlong BridgeHandle, direct-ByteBuffer push/poll/meters,
+  Param/Move -> ParamMoveTable vs everything-else -> EventRing routing).
+  OboeDriver gained an atomic `inputOpen()` fact for the poll path. CMake
+  dawcore now lists jni/NativeAudioBridge.cpp (still NOT wired into Gradle).
+- Kotlin `com.example.synth.engine` — WireProtocol (bit-exact fnv1a32/64 +
+  makeNodeUid mirrors, all layout/opcode constants), ParamKeys (contract
+  semantic keys for M2 strips), EnginePrefs/EngineCaps, NativeAudioBridge
+  (guarded loadLibrary: UI-only while the .so doesn't ship), CommandEncoder
+  (batch builder; backlog cap -> front-of-queue Panic + reconcile),
+  EngineController (ALL natives serialized on one daw-engine-io thread = the
+  SPSC producer; backpressure retry; D5 reopen), EngineReadback (16 ms
+  status/meter polls on the same dispatcher; playhead extrapolation),
+  EngineSync (transport + param-move classification off POST-reduction state;
+  reconcile + attach-time full param re-send that queues until start).
+- `com.example.DawRuntime` — process-scoped composition root (audio survives
+  rotation, spec Part 1 §15); MainActivity now passes the shared store into
+  MainDawScreen.
+- Map: 101 classes, bidirectional sweep green. Verified data-flow walk:
+  dispatch -> reduce -> onEngineSync -> send{} -> encode -> push -> decode ->
+  ring/table -> RT drain -> clock/meter publish -> poll -> flows -> UI.
+
+**Next (M1, blueprint §11):** Kotlin domain model v2 (+editSeq stamping),
+EngineSync structure-delta serialization (StateCodec), native EngineModel +
+GraphBuilder skeleton, TempoMap (immutable base + RT tail), TransportEngine
+replacing AudioEngine's placeholder transport, TimelineSnapshot swap
+mechanics, MidiScheduler.
+
 ## 2026-08-25 (later) — condemned skeleton fully removed
 
 Per the owner's directive after review sign-off: all code in direct argument

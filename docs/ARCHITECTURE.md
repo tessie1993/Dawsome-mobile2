@@ -2,7 +2,7 @@
 
 This document is the **authoritative living map of the codebase**, maintained and kept continuously synchronized with every class, interface, method, and relationship implemented across the architecture (both Native C++ NDK DSP Engine and Kotlin UDF Layer).
 
-**Scope:** this map documents code that exists in the source tree today. The target end-state architecture is specified in [`docs/spec/ARCHITECTURE_BLUEPRINT.md`](spec/ARCHITECTURE_BLUEPRINT.md) (contracts: [`CONTRACTS.md`](spec/CONTRACTS.md); functional specs: [`SPEC_PART1_FUNCTIONAL.md`](spec/SPEC_PART1_FUNCTIONAL.md), [`SPEC_PART2_WORKFLOW.md`](spec/SPEC_PART2_WORKFLOW.md)); classes move into this map when their source lands. The old pre-blueprint C++ skeleton has been fully removed - `app/src/main/cpp/` now contains only new-engine modules (`core/`, `dsp/`) built to the blueprint, not yet wired into the Gradle build (that happens when the engine is ready to link; blueprint M0).
+**Scope:** this map documents code that exists in the source tree today. The target end-state architecture is specified in [`docs/spec/ARCHITECTURE_BLUEPRINT.md`](spec/ARCHITECTURE_BLUEPRINT.md) (contracts: [`CONTRACTS.md`](spec/CONTRACTS.md); functional specs: [`SPEC_PART1_FUNCTIONAL.md`](spec/SPEC_PART1_FUNCTIONAL.md), [`SPEC_PART2_WORKFLOW.md`](spec/SPEC_PART2_WORKFLOW.md)); classes move into this map when their source lands. The old pre-blueprint C++ skeleton has been fully removed - `app/src/main/cpp/` now contains only new-engine modules (`core/`, `dsp/`, `engine/`, `jni/`) built to the blueprint, not yet wired into the Gradle build (that happens when the engine is ready to link; blueprint M0).
 
 ```mermaid
 classDiagram
@@ -245,11 +245,84 @@ classDiagram
     AudioEngine ..> MeterFrame
     AudioEngine ..> TimeAnchor
 
+    %% ---- M0 jni/ (NEW ENGINE - seam-5 wire codecs + the one JNI TU) ----
+    class FrameHeader {
+        <<8-byte command frame envelope: u16 version, u16 kind, u32 byteLen>>
+    }
+    class ControlOpPayload {
+        <<8-byte non-RT control op: u32 op + u32 arg (Nop only today)>>
+    }
+    class CommandCodec {
+        <<pure static Kotlin->C++ command decoder/encoder (seam 5): length-delimited frames, EngineMessageBatch = N x 64B POD little-endian as-is; visitor-driven, record-granular backpressure, unknown kinds skipped+counted, unknown version refused>>
+        +decode(data, len, visitor) Result
+        +writeFrameHeader(dst, dstLen, kind, payloadLen) size_t
+    }
+    class StateCodec {
+        <<pure static entity-delta codec (model deltas -> EngineModel builder, M1): contract-ordered 16-byte header read field-wise (u64 unaligned at offset 4); idempotent upserts/removes, no backpressure on the builder path>>
+        +decode(data, len, visitor) Result
+        +writeDeltaHeader(dst, dstLen, kind, entityId, payloadLen) size_t
+    }
+    class EntityDelta {
+        <<one decoded delta handed to the builder>>
+        +uint16_t entityKind
+        +uint64_t entityId
+        +const uint8_t* payload
+        +uint32_t byteLen
+    }
+    class EngineStatusWire {
+        <<80-byte frozen poll POD (ReadbackWire.h): status flags (clock bits + running/needsReopen/inputOpen), transport clock, TimeAnchor, stream facts, engine counters>>
+        +uint32_t version
+        +uint32_t flags
+        +int64_t samplePos
+        +double beat
+        +double bpm
+        +int64_t anchorFrame
+        +int64_t anchorNanos
+        +double sampleRate
+        +float outputLatencyMs
+        +float inputLatencyMs
+        +uint32_t xruns
+        +uint32_t droppedNotes
+        +uint32_t panics
+    }
+    class BridgeHandle {
+        <<one native engine session; NativeAudioBridge.cpp is the ONLY jni.h TU, natives RegisterNatives'd from JNI_OnLoad against Kotlin NativeAudioBridge; jlong handle = pointer; lifecycle+push confined to the Kotlin engine-io thread>>
+        +AudioEngine engine
+        +atomic~bool~ running
+        +atomic~uint32_t~ codecErrors
+        +atomic~uint32_t~ deferredFrames
+    }
+    class PushVisitor {
+        <<routes decoded records: Param/Move -> ParamMoveTable.set (overflow = reconcile flag, never backpressure), everything else -> EventRing.tryPush (refusal = backpressure); BlockSet/ModelDelta counted-deferred until builder (M1/M2)>>
+        +onMessage(m: EngineMessage) bool
+        +onControl(c: ControlOpPayload) bool
+        +onBlockSet(p, len)
+        +onModelDelta(p, len)
+    }
+
+    CommandCodec ..> FrameHeader
+    CommandCodec ..> ControlOpPayload
+    CommandCodec ..> EngineMessage
+    StateCodec ..> EntityDelta
+    BridgeHandle *-- AudioEngine
+    BridgeHandle ..> CommandCodec
+    BridgeHandle ..> PushVisitor
+    BridgeHandle ..> EngineStatusWire
+    PushVisitor ..> AudioEngine
+
     %% ==========================================
     %% 2. APP ENTRY POINT & WORKSPACE SCREENS (EARTH.DESIGN)
     %% ==========================================
     class MainActivity {
         +onCreate(savedInstanceState: Bundle)
+    }
+
+    class DawRuntime {
+        <<object; process-scoped composition root: the one ProjectStore + engine trio live here so audio survives rotation/navigation (spec Part 1 §15); idempotent ensureStarted from activity onCreate>>
+        +ProjectStore store
+        +EngineController controller
+        +EngineReadback readback
+        +ensureStarted()
     }
 
     class MainDawScreen {
@@ -749,8 +822,119 @@ classDiagram
     }
 
     %% ==========================================
-    %% 7. RELATIONSHIPS & DEPENDENCY FLOW
+    %% 7. KOTLIN ENGINE BRIDGE (com.example.synth.engine)
     %% ==========================================
+    class WireProtocol {
+        <<object; single Kotlin source of seam-5 truth: frame kinds/versions, EngineMessage family+op numbering, status/meter layouts, native result codes, and bit-exact fnv1a32/fnv1a64/makeNodeUid mirrors of NodeUid.h>>
+        +paramKey(key: String) Int
+        +fnv1a64(s: String) Long
+        +makeNodeUid(kind: String, entityId: String) Long
+        +Long masterNodeUid
+    }
+    class ParamKeys {
+        <<object; contract semantic key strings - M2 TrackStrip/MasterStrip ParamDescriptors declare exactly these>>
+        +String MIXER_VOLUME
+        +String MIXER_PAN
+        +String MIXER_SEND_A
+        +String MIXER_SEND_B
+        +String MIXER_MUTE
+    }
+    class EnginePrefs {
+        <<data class; audio session config: enableInput (off until the M6 permission flow), bufferBursts, manualLatencyOffsetMs>>
+    }
+    class EngineCaps {
+        <<object; Kotlin mirror of the EngineConfig.h contractual capacities>>
+    }
+    class NativeAudioBridge {
+        <<object; guarded System.loadLibrary("dawcore") - app runs UI-only when the .so is absent; externals registered native-side against this exact class name; every native serialized on the engine-io thread>>
+        +Boolean isLoaded
+        +nativeCreate() Long
+        +nativeDestroy(handle: Long)
+        +nativeStart(handle, enableInput, bufferBursts) Boolean
+        +nativeStop(handle: Long)
+        +nativePushCommands(handle, buffer: ByteBuffer, byteLen) Int
+        +nativePollStatus(handle, buffer: ByteBuffer) Boolean
+        +nativeDrainMeters(handle, buffer: ByteBuffer, maxFrames) Int
+        +nativeConsumeParamOverflow(handle: Long) Boolean
+    }
+    class CommandEncoder {
+        <<engine-io-confined batch builder: seam-2 records into EngineMessageBatch frames in one reused direct LE buffer; consumed-prefix removal on backpressure; backlog cap replaces the queue with a front-of-queue Panic + onBacklogDropped reconcile>>
+        +play()
+        +stop()
+        +togglePlay()
+        +record(on: Boolean)
+        +seekBeat(beat: Double)
+        +seekSample(samplePos: Long)
+        +setTempo(bpm: Double)
+        +setLoopRegion(startBeat, endBeat)
+        +loop(on: Boolean)
+        +metronome(on: Boolean)
+        +setTimeSig(numerator, denominator)
+        +paramMove(nodeUid, paramKeyHash, plain, editSeq)
+        +paramTouch(nodeUid, paramKeyHash, editSeq)
+        +paramRelease(nodeUid, paramKeyHash, editSeq)
+        +noteOn(nodeUid, noteId, pitchSemitones, velocity)
+        +noteOff(nodeUid, noteId, releaseVelocity)
+        +allNotesOff(nodeUid)
+        +panic()
+        +flush(handle: Long) FlushResult
+    }
+    class EngineController {
+        <<native lifecycle owner; ALL native calls run on its single daw-engine-io dispatcher = the JNI SPSC producer thread; states UNAVAILABLE/IDLE/RUNNING/FAILED; send{} = enqueue+flush with 5ms backpressure retry; param overflow -> onReconcileNeeded; D5 route loss -> requestReopen (stop+start)>>
+        +StateFlow~EngineState~ state
+        +start(enginePrefs: EnginePrefs)
+        +stop()
+        +release()
+        +requestReopen()
+        +send(block: CommandEncoder lambda)
+    }
+    class EngineStatus {
+        <<data class; decoded EngineStatusWire snapshot + polledAtNanos>>
+    }
+    class MeterReading {
+        <<data class; decoded MeterFrame: linear peak/RMS, gain reduction, clip flags, seq>>
+    }
+    class EngineReadback {
+        <<polls status+meters every 16ms ON the controller's engine-io dispatcher (single legal meter-ring consumer; destroy-vs-poll races impossible by construction); flows for UI holders; wall-clock playhead extrapolation; needsReopen -> controller.requestReopen, storm-guarded>>
+        +StateFlow~EngineStatus~ status
+        +StateFlow~Map_NodeUid_MeterReading~ meters
+        +start()
+        +stop()
+        +estimatedBeat(nowNanos: Long) Double
+        +estimatedSamplePos(nowNanos: Long) Long
+    }
+    class EngineSync {
+        <<the change-classification seam (dual-model): M0 classes = transport intents + param moves addressed (makeNodeUid, paramKey); structure-shaped edits become StateCodec ModelDeltas from M1; reads POST-reduction ProjectState; reconcile = resendAuthoritativeParams (also at attach, queued until engine start = pre-graph table warm-up)>>
+        +attach()
+        +detach()
+        +resendAuthoritativeParams()
+    }
+
+    EngineController *-- CommandEncoder
+    EngineController ..> NativeAudioBridge
+    EngineController ..> EnginePrefs
+    EngineReadback ..> EngineController
+    EngineReadback ..> NativeAudioBridge
+    EngineReadback ..> WireProtocol
+    EngineReadback *-- EngineStatus
+    EngineReadback *-- MeterReading
+    CommandEncoder ..> WireProtocol
+    CommandEncoder ..> NativeAudioBridge
+    EngineSync ..> ProjectStore
+    EngineSync ..> EngineController
+    EngineSync ..> WireProtocol
+    EngineSync ..> ParamKeys
+
+    %% ==========================================
+    %% 8. RELATIONSHIPS & DEPENDENCY FLOW
+    %% ==========================================
+
+    MainActivity ..> DawRuntime
+    DawRuntime *-- ProjectStore
+    DawRuntime *-- EngineController
+    DawRuntime *-- EngineReadback
+    DawRuntime *-- EngineSync
+    NativeAudioBridge ..> BridgeHandle : JNI (seam 5)
 
     MainActivity ..> MainDawScreen
     MainDawScreen ..> ProjectStore

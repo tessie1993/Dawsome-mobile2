@@ -50,6 +50,7 @@ bool OboeDriver::open(RenderSink& sink, const Config& cfg) noexcept {
         if (in.openStream(inputStream_) != oboe::Result::OK) {
             inputStream_.reset();                     // output-only is still a session
         }
+        inputOpen_.store(inputStream_ != nullptr, std::memory_order_release);
     }
 
     inputRing_.prepare(framesPerBurst_ * 4, kMaxChannels, framesPerBurst_ * 2);
@@ -71,6 +72,7 @@ void OboeDriver::stop() noexcept {
 
 void OboeDriver::close() noexcept {
     stop();
+    inputOpen_.store(false, std::memory_order_release);
     if (inputStream_) { inputStream_->close(); inputStream_.reset(); }
     if (outputStream_) { outputStream_->close(); outputStream_.reset(); }
     sink_ = nullptr;

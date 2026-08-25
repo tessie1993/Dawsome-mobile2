@@ -25,7 +25,7 @@ if(ANDROID)
     add_library(dawcore SHARED
         engine/OboeDriver.cpp
         engine/AudioEngine.cpp
-        # jni/ translation units land here next (M0 feature 4).
+        jni/NativeAudioBridge.cpp
         )
     target_link_libraries(dawcore PRIVATE dawcore_core)
     # Oboe arrives via prefab dependency when Gradle wiring is enabled:
