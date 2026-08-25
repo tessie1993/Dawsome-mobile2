@@ -326,6 +326,7 @@ class ProjectStore(
     private fun isStateChangeUndoable(action: ProjectAction): Boolean {
         return when (action) {
             is ProjectAction.Play, is ProjectAction.Stop, is ProjectAction.TogglePlay,
+            is ProjectAction.ToggleMetronome,   // transport toggle, not a document edit
             is ProjectAction.SeekToBeat, is ProjectAction.SelectTab, is ProjectAction.SelectTrack -> false
             else -> true
         }

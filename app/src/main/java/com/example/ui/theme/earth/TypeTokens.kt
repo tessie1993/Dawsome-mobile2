@@ -1,6 +1,7 @@
 package com.example.ui.theme.earth
 
 import androidx.compose.runtime.Immutable
+import androidx.compose.ui.text.ExperimentalTextApi
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.Font
 import androidx.compose.ui.text.font.FontFamily
@@ -17,6 +18,10 @@ import com.example.R
  * each file's default instance — legible, just single-weight).
  */
 object EarthFonts {
+    // The variationSettings overload of Font is @ExperimentalTextApi (the
+    // documented variable-fonts path; review cycle-2 blocker: without the
+    // opt-in this does not compile at the default RequiresOptIn ERROR level).
+    @OptIn(ExperimentalTextApi::class)
     private fun variable(res: Int, weight: FontWeight) = Font(
         resId = res,
         weight = weight,
@@ -93,5 +98,22 @@ data class EarthTypography(
         fontSize = 8.sp,
         lineHeight = 10.sp,
         color = EarthColorTokens.TextPrimary
+    ),
+    // Compact variants (review cycle-2: sizes live HERE, never as inline
+    // sp overrides in component code).
+    val displayTimeCompact: TextStyle = TextStyle(
+        fontFamily = EarthFonts.Mono,
+        fontWeight = FontWeight.Bold,
+        fontSize = 13.sp,
+        lineHeight = 16.sp,
+        letterSpacing = 0.5.sp,
+        color = EarthColorTokens.TextPrimary
+    ),
+    val microLabel: TextStyle = TextStyle(
+        fontFamily = EarthFonts.Primary,
+        fontWeight = FontWeight.Normal,
+        fontSize = 8.sp,
+        lineHeight = 10.sp,
+        color = EarthColorTokens.TextSecondary
     )
 )

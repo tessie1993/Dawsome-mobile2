@@ -168,7 +168,6 @@ private fun EarthNavigationDock(
                 Text(
                     text = tab.title.uppercase(),
                     style = EarthTheme.typography.microBadge,
-                    fontSize = 7.sp,
                     color = tint
                 )
             }

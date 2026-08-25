@@ -18,10 +18,10 @@ import androidx.compose.material.icons.filled.AllInclusive
 import androidx.compose.material.icons.filled.AvTimer
 import androidx.compose.material.icons.filled.FiberManualRecord
 import androidx.compose.material.icons.filled.PlayArrow
-import androidx.compose.material.icons.filled.Redo
+import androidx.compose.material.icons.automirrored.filled.Redo
 import androidx.compose.material.icons.filled.Schedule
 import androidx.compose.material.icons.filled.Stop
-import androidx.compose.material.icons.filled.Undo
+import androidx.compose.material.icons.automirrored.filled.Undo
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -33,7 +33,6 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import com.example.ui.state.TransportStateHolder
 import com.example.ui.theme.earth.EarthColorTokens
 import com.example.ui.theme.earth.EarthGlassTokens
@@ -151,12 +150,10 @@ fun EarthTransportBar(
             ) {
                 Text(
                     text = "BPM",
-                    style = EarthTheme.typography.paramLabel,
-                    fontSize = 8.sp,
-                    color = EarthColorTokens.TextSecondary
+                    style = EarthTheme.typography.microLabel
                 )
                 Text(
-                    text = String.format("%.2f", state.bpm),
+                    text = String.format(java.util.Locale.ROOT, "%.2f", state.bpm),
                     style = EarthTheme.typography.bpmValue
                 )
             }
@@ -179,16 +176,13 @@ fun EarthTransportBar(
                     Spacer(modifier = Modifier.width(3.dp))
                     Text(
                         text = state.barsBeatsFormatted,
-                        style = EarthTheme.typography.displayTime,
-                        fontSize = 13.sp,
+                        style = EarthTheme.typography.displayTimeCompact,
                         maxLines = 1
                     )
                 }
                 Text(
                     text = "Project: ${state.projectName}",
-                    style = EarthTheme.typography.paramLabel,
-                    fontSize = 8.sp,
-                    color = EarthColorTokens.TextSecondary,
+                    style = EarthTheme.typography.microLabel,
                     maxLines = 1
                 )
             }
@@ -196,7 +190,6 @@ fun EarthTransportBar(
             Text(
                 text = "${state.timeSigNum}/${state.timeSigDen}",
                 style = EarthTheme.typography.paramValue,
-                fontSize = 10.sp,
                 color = EarthColorTokens.TextSecondary
             )
         }
@@ -208,8 +201,8 @@ fun EarthTransportBar(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(4.dp)
         ) {
-            MicroButton(Icons.Filled.Undo, "Undo", onUndo)
-            MicroButton(Icons.Filled.Redo, "Redo", onRedo)
+            MicroButton(Icons.AutoMirrored.Filled.Undo, "Undo", onUndo)
+            MicroButton(Icons.AutoMirrored.Filled.Redo, "Redo", onRedo)
         }
     }
 }

@@ -1210,6 +1210,8 @@ classDiagram
         +TextStyle paramLabel
         +TextStyle paramValue
         +TextStyle microBadge
+        +TextStyle displayTimeCompact
+        +TextStyle microLabel
     }
 
     EarthTypography ..> EarthFonts

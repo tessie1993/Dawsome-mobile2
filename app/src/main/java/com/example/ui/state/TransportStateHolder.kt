@@ -63,11 +63,20 @@ class TransportStateHolder(
             val formatted = String.format("%02d:%02d:%02d", minutes, seconds, millis)
 
             // Reference readout format: bars.beats.sixteenths (001.03.00).
-            val sig = if (p.timeSigNum > 0) p.timeSigNum else 4
-            val bar = (p.playheadBeat / sig).toInt() + 1
-            val beatInBar = (p.playheadBeat % sig).toInt() + 1
-            val sixteenth = ((p.playheadBeat % 1.0f) * 4).toInt()
-            val barsBeats = String.format("%03d.%02d.%02d", bar, beatInBar, sixteenth)
+            // playheadBeat is in QUARTER notes; a bar is num * 4/den quarters
+            // (the engine's barBeats() rule) - dividing by the numerator alone
+            // is only right for x/4 signatures (review cycle-2 finding).
+            val num = if (p.timeSigNum > 0) p.timeSigNum else 4
+            val den = if (p.timeSigDen > 0) p.timeSigDen else 4
+            val denomBeatQuarters = 4.0f / den
+            val barQuarters = num * denomBeatQuarters
+            val posInBar = p.playheadBeat % barQuarters
+            val beatPos = posInBar / denomBeatQuarters
+            val bar = (p.playheadBeat / barQuarters).toInt() + 1
+            val beatInBar = beatPos.toInt() + 1
+            val sixteenth = ((beatPos % 1.0f) * 4).toInt()
+            val barsBeats = String.format(
+                java.util.Locale.ROOT, "%03d.%02d.%02d", bar, beatInBar, sixteenth)
 
             return TransportUiState(
                 isPlaying = p.isPlaying,

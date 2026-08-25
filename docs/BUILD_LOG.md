@@ -6,6 +6,41 @@ Newest entry first. Each entry: where the build stands, what comes next.
 
 ---
 
+## 2026-08-25 — Review cycle 2: FAIL -> all findings fixed (resubmitted)
+
+The gate earned its keep: the reviewer caught a REAL COMPILE BREAKER
+before CI did — Font(resId, weight, variationSettings) is
+@ExperimentalTextApi and the repo had no opt-in, so commit 8941479's
+Kotlin build was red on arrival. Fixes, finding by finding:
+
+- [BLOCKER] @OptIn(ExperimentalTextApi::class) on EarthFonts.variable()
+  with the rationale in a comment. Lesson: experimental-API opt-ins are
+  part of "compiles by inspection" - check RequiresOptIn on every new
+  androidx API surface.
+- [MINOR] bars.beats math is now denominator-aware (bar = num * 4/den
+  quarters, matching the engine's barBeats() rule; beats counted in the
+  denominator's unit) - 6/8 reads correctly.
+- [MINOR] OFL compliance: assets/fonts/ carries the three OFL.txt texts
+  (they SHIP in the APK, satisfying accompany-distribution) + VENDOR.md
+  provenance manifest per the dr_libs precedent.
+- [MINOR] Zero inline sp overrides remain: EarthTypography gained
+  displayTimeCompact + microLabel; nav label and time-sig use existing
+  tokens as-is. Sizes live in the token file only.
+- [NIT] StateCodec: gate comment ("widen with the implementation") +
+  phantom DeviceSampleRefPayload reference corrected.
+- [NIT] ToggleMetronome excluded from the undo stack (transport toggle,
+  not a document edit); Undo/Redo icons -> AutoMirrored variants;
+  Locale.ROOT pinned on all numeric readout formatting.
+- [NIT deferrals tracked]: record/metronome pulse-flash, BPM touch-scrub
+  (milestone-commented), 6-item dock consolidation, play-glyph
+  black-vs-white errata (KEEPING the render's black-on-amber - higher
+  contrast; COMPONENTS.md §2.1 white noted as pack errata).
+
+Host check green; map 200 classes + the two new type styles; sweep green
+incl. duplicates. Resubmitted to the reviewer for the cycle-2 verdict.
+
+---
+
 ## 2026-08-25 — Earth V2 UI conformance pass 1 (user-flagged; portrait core)
 
 User called out that the UI does not look like the Earth.Design V2 pack.
