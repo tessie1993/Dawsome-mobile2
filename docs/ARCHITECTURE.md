@@ -2,7 +2,7 @@
 
 This document is the **authoritative living map of the codebase**, maintained and kept continuously synchronized with every class, interface, method, and relationship implemented across the architecture (both Native C++ NDK DSP Engine and Kotlin UDF Layer).
 
-**Scope:** this map documents code that exists in the source tree today. The target end-state architecture (including the not-yet-implemented `AudioEngine`, `SessionEngine`, `AutomationEngine`, and the `NativeAudioBridge` JNI layer) is specified in [`docs/spec/implementation_plan.md`](spec/implementation_plan.md); classes move into this map when their source lands. The C++ classes under `app/src/main/cpp/` are present in source but not yet wired into the Gradle build (no CMake integration yet — that is the next milestone).
+**Scope:** this map documents code that exists in the source tree today. The target end-state architecture is specified in [`docs/spec/ARCHITECTURE_BLUEPRINT.md`](spec/ARCHITECTURE_BLUEPRINT.md) (built from the functional specs [`SPEC_PART1_FUNCTIONAL.md`](spec/SPEC_PART1_FUNCTIONAL.md) and [`SPEC_PART2_WORKFLOW.md`](spec/SPEC_PART2_WORKFLOW.md)); classes move into this map when their source lands. The C++ classes under `app/src/main/cpp/` are present in source but not yet wired into the Gradle build (no CMake integration yet — that is the blueprint's M0 milestone).
 
 ```mermaid
 classDiagram

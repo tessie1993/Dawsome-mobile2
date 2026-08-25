@@ -11,7 +11,7 @@ import org.junit.Test
 
 /**
  * Reducer transition tests for [ProjectStore], as mandated by
- * docs/spec/implementation_plan.md ("ProjectStore state transition
+ * docs/spec/ARCHITECTURE_BLUEPRINT.md ("ProjectStore state transition
  * verification for all ProjectAction types").
  *
  * The store is given an eagerly-executing test scope so dispatch()
