@@ -92,6 +92,8 @@ object WireProtocol {
     const val ENTITY_TEMPO_MAP = 7
     const val ENTITY_LANE_GROUP = 8
     const val ENTITY_GROOVE = 9
+    const val ENTITY_SAMPLE_REF = 10   // contracts v1.2: entityId = device uid
+    const val ENTITY_PREVIEW = 11      // contracts v1.2: entityId = fileId
 
     // ---- readback (ReadbackWire.h) -----------------------------------------
     // Status: version u32@0, flags u32@4, samplePos i64@8, beat f64@16,

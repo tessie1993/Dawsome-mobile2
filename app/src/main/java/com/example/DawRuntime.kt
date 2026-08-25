@@ -1,10 +1,16 @@
 package com.example
 
+import android.content.Context
+import com.example.data.media.FactoryPack
 import com.example.synth.domain.ProjectStore
 import com.example.synth.engine.EngineController
 import com.example.synth.engine.EnginePrefs
 import com.example.synth.engine.EngineReadback
 import com.example.synth.engine.EngineSync
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
 
 /**
  * Process-scoped composition root: the one ProjectStore and the engine trio
@@ -24,13 +30,17 @@ object DawRuntime {
     val readback: EngineReadback by lazy { EngineReadback(controller) }
 
     private val sync: EngineSync by lazy { EngineSync(store, controller) }
+    private val ioScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private var started = false
 
-    fun ensureStarted() {
+    fun ensureStarted(context: Context) {
         if (started) return
         started = true
         sync.attach()               // queues the initial param sync
         controller.start(EnginePrefs())
         readback.start()
+        // First run synthesizes the factory WAVs (~1 MB) - IO, off-main.
+        val app = context.applicationContext
+        ioScope.launch { FactoryPack.ensureInstalled(app) }
     }
 }

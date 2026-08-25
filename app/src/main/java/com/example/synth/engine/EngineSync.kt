@@ -187,6 +187,26 @@ class EngineSync(
             is ProjectAction.ToggleTrackSolo -> sendTrackUpsert(state, editSeq, action.trackId)
             is ProjectAction.ToggleTrackArm -> sendTrackUpsert(state, editSeq, action.trackId)
 
+            // ---- media (contracts v1.2: SampleRef marks the graph dirty
+            // builder-side; Preview never touches the graph) --------------------
+            is ProjectAction.AssignSampleToDevice -> {
+                val d = DeltaEncoder(editSeq)
+                d.sampleRef(
+                    WireProtocol.makeNodeUid(WireProtocol.NODE_KIND_DEVICE, action.deviceId),
+                    action.slot, action.fileId, action.path)
+                controller.sendModelDelta(d.build())
+            }
+            is ProjectAction.PreviewSample -> {
+                val d = DeltaEncoder(editSeq)
+                d.preview(action.fileId, action.path)
+                controller.sendModelDelta(d.build())
+            }
+            is ProjectAction.StopPreview -> {
+                val d = DeltaEncoder(editSeq)
+                d.previewStop()
+                controller.sendModelDelta(d.build())
+            }
+
             // ---- session playback intents (SessionPlayer, seam-2 Session
             // family; quantization + arbitration are engine-side, the store's
             // isPlaying/isOverriddenBySession flags are the optimistic UI) ----
@@ -272,9 +292,10 @@ class EngineSync(
         d.upsertTrack(trackUid, trackTypeWire(t.type), trackFlags(t), state.tracks.indexOf(t),
             t.volumeDb, t.pan, t.sendLevelA, t.sendLevelB)
         t.devices.forEachIndexed { order, dev ->
-            d.upsertDevice(WireProtocol.makeNodeUid(WireProtocol.NODE_KIND_DEVICE, dev.id),
-                trackUid, deviceTypeWire(dev.type), dev.isEnabled, order,
+            val duid = WireProtocol.makeNodeUid(WireProtocol.NODE_KIND_DEVICE, dev.id)
+            d.upsertDevice(duid, trackUid, deviceTypeWire(dev.type), dev.isEnabled, order,
                 deviceWireParams(dev))
+            for ((slot, ref) in dev.sampleRefs) d.sampleRef(duid, slot, ref.fileId, ref.path)
         }
         for (c in t.arrangementClips) encodeArrangementClip(d, trackUid, c)
         for (c in t.sessionClips) encodeSessionClip(d, trackUid, c)
@@ -312,8 +333,10 @@ class EngineSync(
             maybeRemoveContent(d, postState, contentIdOf(c.id, c.linkedArrangementClipId))
         }
         for (dev in gone.devices) {
-            d.remove(WireProtocol.ENTITY_DEVICE,
-                WireProtocol.makeNodeUid(WireProtocol.NODE_KIND_DEVICE, dev.id))
+            val duid = WireProtocol.makeNodeUid(WireProtocol.NODE_KIND_DEVICE, dev.id)
+            // Removal is non-cascading model-side: refs get their own remove.
+            if (dev.sampleRefs.isNotEmpty()) d.remove(WireProtocol.ENTITY_SAMPLE_REF, duid)
+            d.remove(WireProtocol.ENTITY_DEVICE, duid)
         }
         d.remove(WireProtocol.ENTITY_TRACK,
             WireProtocol.makeNodeUid(WireProtocol.NODE_KIND_TRACK, gone.id))
@@ -418,12 +441,14 @@ class EngineSync(
         val t = state.tracks.firstOrNull { it.id == trackId } ?: return
         val trackUid = WireProtocol.makeNodeUid(WireProtocol.NODE_KIND_TRACK, trackId)
         val d = DeltaEncoder(editSeq)
-        // Removed devices (in lastState, not in state).
+        // Removed devices (in lastState, not in state); their sample refs get
+        // explicit removes too (the model never cascades).
         lastState.tracks.firstOrNull { it.id == trackId }?.devices
             ?.filter { old -> t.devices.none { it.id == old.id } }
             ?.forEach { gone ->
-                d.remove(WireProtocol.ENTITY_DEVICE,
-                    WireProtocol.makeNodeUid(WireProtocol.NODE_KIND_DEVICE, gone.id))
+                val duid = WireProtocol.makeNodeUid(WireProtocol.NODE_KIND_DEVICE, gone.id)
+                if (gone.sampleRefs.isNotEmpty()) d.remove(WireProtocol.ENTITY_SAMPLE_REF, duid)
+                d.remove(WireProtocol.ENTITY_DEVICE, duid)
             }
         // Upsert the whole chain (order is positional).
         t.devices.forEachIndexed { order, dev ->

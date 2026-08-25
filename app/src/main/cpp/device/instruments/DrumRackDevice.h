@@ -233,6 +233,17 @@ public:
     // ---- InstrumentNode -----------------------------------------------------
     VoiceGroup* voiceGroup() override { return this; }
 
+    // [builder, pre-install] Model-resolved pad assignment (SampleRef slot =
+    // pad index): the pad VOICE owns the pinned handle - handles are normal
+    // refcounted members that never ride the DrumRackShared POD migration
+    // (same residency protocol as SimpleSampler). The pad plays it in
+    // Mode::Sample (padN.mode = 5); assigning does not flip the mode - that
+    // is the model's call, sent as an ordinary param.
+    void setPadSample(int pad, SampleHandle handle) noexcept {
+        if (pad < 0 || pad >= kPads) return;
+        pads_[pad].setSample(static_cast<SampleHandle&&>(handle));
+    }
+
     uint32_t budgetRefusals() const noexcept { return budgetRefusals_; }
 
 private:

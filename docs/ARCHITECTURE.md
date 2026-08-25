@@ -426,7 +426,7 @@ classDiagram
         +uint32_t flags
     }
     class AudioEngine {
-        <<facade + RT callback spine: anchor publish -> BLOCK-BOUNDARY SWAPS (PlaybackGraph claim: executeAdopt while the old graph is still valid, install, ack retired ?: epoch-1, publishInstalledGraphSeq to both tables, reapplyNewerThan through the NEW resolver; TimelineSnapshot claim + scheduler reconcile + SessionPlayer row prune) -> drains (param moves resolve through the installed graph, misses = counted seam-4 skew; Session family ops -> SessionPlayer, launch-while-stopped starts the transport) -> transport advance, each span further SPLIT at session launch boundaries (activateDueAt at every sub-span start cuts the outgoing source via flushTrack; sample-exact activations, split-guard leftovers land next block) + MIDI/metronome scheduling per sub-span with the SessionPlayer as arbiter -> input consume -> graph processBlock (Main bus -> driver outs; silence before first claim) -> meters to MeterBus -> clock publish. Same-rate reopen keeps transport state. Instruments write into track buffers from M4>>
+        <<facade + RT callback spine: anchor publish -> BLOCK-BOUNDARY SWAPS (PlaybackGraph claim: executeAdopt while the old graph is still valid, install, ack retired ?: epoch-1, publishInstalledGraphSeq to both tables, reapplyNewerThan through the NEW resolver; TimelineSnapshot claim + scheduler reconcile + SessionPlayer row prune) -> drains (param moves resolve through the installed graph, misses = counted seam-4 skew; Session family ops -> SessionPlayer, launch-while-stopped starts the transport) -> transport advance, each span further SPLIT at session launch boundaries (activateDueAt at every sub-span start cuts the outgoing source via flushTrack; sample-exact activations, split-guard leftovers land next block) + MIDI/metronome scheduling per sub-span with the SessionPlayer as arbiter -> input consume -> graph processBlock (Main bus -> driver outs; silence before first claim) -> metronome then PreviewPlayer render post-graph on the cue-fold lane (never recorded/metered) -> meters to MeterBus -> clock publish. Same-rate reopen keeps transport state. Instruments write into track buffers from M4>>
         +start(cfg: OboeDriver.Config) bool
         +stop()
         +jniEvents() EventRing
@@ -439,6 +439,7 @@ classDiagram
         +transport() TransportEngine
         +builder() GraphBuilder
         +timelineOffer() OfferSlot~TimelineSnapshot~
+        +previewOffer() OfferSlot~PreviewClip~
         +timeline() TimelineSnapshot*
         +midi() MidiScheduler
         +render(outputs, numFrames, input, time)
@@ -483,11 +484,19 @@ classDiagram
     class ModelTempo {
         <<canonical tempo/meter event lists (sorted at apply)>>
     }
+    class ModelSampleRef {
+        <<one sample assignment on a device (v1.2): slot (0 = single-sample, pad index for DrumRack), fileId (Kotlin fnv1a64), miss-load path>>
+    }
+    class ModelPreview {
+        <<transient audition request (v1.2): fileId (0 = stop), path, serial (bumps every frame so a same-file repeat retriggers)>>
+    }
     class EngineModel {
-        <<compact C++ mirror of the edit model (blueprint 2.3): GraphBuilder-thread-only, fed by StateCodec deltas (idempotent upserts; byteLen 0 = remove; non-cascading - compiles skip dangling refs per seam-4 skew); dirty classes kDirtyTimeline/Tempo/Graph consumed per build cycle; Rack/Routing/LaneGroup/Groove kinds counted-deferred to M2/M3>>
+        <<compact C++ mirror of the edit model (blueprint 2.3): GraphBuilder-thread-only, fed by StateCodec deltas (idempotent upserts; byteLen 0 = remove; non-cascading - compiles skip dangling refs per seam-4 skew); dirty classes kDirtyTimeline/Tempo/Graph/Preview consumed per build cycle; SampleRef marks graph-dirty (builder re-pins at compile), Preview marks its own bit; hostile-payload bounds kMaxSamplePathBytes/kMaxSampleSlotsPerDevice; Rack/Routing/LaneGroup/Groove kinds counted-deferred to M2/M3>>
         +applyDelta(d: EntityDelta) bool
         +consumeDirty() uint32_t
         +tracks() / clips() / contents() / devices() / scenes() / tempo()
+        +sampleRefsFor(deviceUid) ModelSampleRef*
+        +preview() ModelPreview
         +lastEditSeq() uint32_t
         +noteEditSeq(seq)
     }
@@ -498,6 +507,8 @@ classDiagram
     EngineModel *-- ModelDevice
     EngineModel *-- ModelScene
     EngineModel *-- ModelTempo
+    EngineModel *-- ModelSampleRef
+    EngineModel *-- ModelPreview
     ModelClipContent *-- ModelNote
     EngineModel ..> EntityDelta
 
@@ -773,6 +784,22 @@ classDiagram
     MetronomeNode ..> TempoMap
     AudioEngine *-- MetronomeNode
 
+    %% ---- M5 engine/ (browser audition - PreviewPlayer) ----
+    class PreviewClip {
+        <<builder-built audition artifact (CONTRACTS v1.2 Preview): epoch + fileId (0 = stop request) + the builder-pinned SampleHandle (empty on stop or decode failure - a failed preview SILENCES the previous one). Lifetime = OfferSlot protocol; freed by the builder after the RT ack>>
+    }
+    class PreviewPlayer {
+        <<RT audition renderer on the metronome's cue-fold lane (post-graph, never recorded/metered; spec P1 §12 preview-before-loading). Claims offered PreviewClips at block boundaries; plays one-shots 1:1 (cache conformed the rate at load; tempo-synced loop preview joins the time-stretch milestone). CLICK DISCIPLINE: 5ms fade-in, a 5ms tail fade INTO the buffer end (truncated files close clean), and a replaced preview fades OUT while the new fades in - the retiring artifact's ack is DEFERRED until its fade completes (builder must not free mid-fade); a third claim inside one fade hard-drops the near-silent oldest. prepare() [non-RT, streams closed] releases held claims - the one legal non-RT ack - so rate changes never strand artifacts in the builder GC>>
+        +prepare(sampleRate, slot: OfferSlot~PreviewClip~)
+        +process(slot, l, r, n)
+        +auditioning() bool
+    }
+
+    PreviewPlayer ..> PreviewClip
+    PreviewPlayer ..> OfferSlot~T~
+    PreviewClip *-- SampleHandle
+    AudioEngine *-- PreviewPlayer
+
     %% ---- M5 media/ (sample foundation - IN PROGRESS: SampleCache + decoder TU next) ----
     class SampleBuffer {
         <<resident decoded audio, channel-planar, capped stereo; carries the CONFORMED rate (cache key half) + source rate (D5 bookkeeping); cache-internal refcount + LRU tick. Owned by SampleCache; evictable only at refs==0, deallocated ONLY inside cache sweeps on non-RT threads>>
@@ -821,7 +848,7 @@ classDiagram
         <<per-pad settings POD: mode (Sub|Noise|Metal|Ring|Bit|Sample), levelDb, tuneSemi, decayMs, tone + shape (mode-multiplexed color/shape), chokeGroup (0 none; mirrors Kotlin DrumPadType groups)>>
     }
     class DrumPadVoice {
-        <<mono one-shot pad voice, five researched synth modes + sample playback: Sub = sine w/ exponential pitch env onto base (single-osc 808 kick design, tanh drive tone); Noise = sine body + SVF-filtered white (classic snare split, shape = mix); Metal = TR-808 cymbal scheme (6 detuned sign-squares summed inharmonic, highpassed; alias smear = the classic character); Ring = multiplied sine pair (cowbell family); Bit = full-rate square through sample-hold decimation + bit quantize (pitch immune to crush depth); Sample = tuned linear-interp one-shot off a cache-pinned SampleHandle (relative repitch 2^(tune/12); handle plumbing joins the media-library milestone). Instant attack + 0.5ms declick, exponential -60dB decay; retrigger hard-cuts (classic drum-machine behavior, masked by the new transient); 30ms transient window protects fresh hits; fastRelease = 5ms steal/choke ramp>>
+        <<mono one-shot pad voice, five researched synth modes + sample playback: Sub = sine w/ exponential pitch env onto base (single-osc 808 kick design, tanh drive tone); Noise = sine body + SVF-filtered white (classic snare split, shape = mix); Metal = TR-808 cymbal scheme (6 detuned sign-squares summed inharmonic, highpassed; alias smear = the classic character); Ring = multiplied sine pair (cowbell family); Bit = full-rate square through sample-hold decimation + bit quantize (pitch immune to crush depth); Sample = tuned linear-interp one-shot off a cache-pinned SampleHandle (relative repitch 2^(tune/12); handles arrive via DrumRackDevice.setPadSample, builder-pinned per compile). Instant attack + 0.5ms declick, exponential -60dB decay; retrigger hard-cuts (classic drum-machine behavior, masked by the new transient); 30ms transient window protects fresh hits; fastRelease = 5ms steal/choke ramp>>
         +prepare(sampleRate)
         +trigger(velocity01, rootPitch, shared, serial)
         +setSample(h: SampleHandle)
@@ -840,6 +867,7 @@ classDiagram
         <<DeviceTypeId 6 "16-Pad Drum Rack" - the default project's drum track: InstrumentNode that IS its own VoiceGroup (per-pad mono voices, up to 16 sounding). Event-split sample-accurate process; NOTE-OFFS IGNORED (one-shots die by decay - honoring step clips' OFFs would chop every drum); ledger admission gates fresh triggers (retrigger reuses its slot); choke groups (nonzero, DrumPadType mirror) fastRelease group-mates on trigger; steal candidates/order mirror the allocator convention exactly (releasing never protected; releasing -> unprotected -> oldest, level tiebreak). 112 contract descriptors (kDrumRackParams: 7 per pad, "padN.mode".."padN.choke"); dense index = pad*7+field>>
         +process(ctx)
         +setParamImmediate(dense, plain)
+        +setPadSample(pad, handle: SampleHandle)
         +saveState(out) / loadState(in)
         +noteOn(note, velocity, mpe) / noteOff(ignored) / allNotesOff
         +voiceGroup() VoiceGroup*
@@ -860,7 +888,7 @@ classDiagram
         +beginRelease() / fastRelease() / kill()
     }
     class SimpleSampler {
-        <<DeviceTypeId 3 "Sampler" - melodic one-sample player on PolyInstrument (pool 16, poly 8); zones/layers/SFZ are MultiSampler's milestone. Sample residency protocol: the MODEL owns the fileId; the GraphBuilder resolves it and calls setSample() with a cache-pinned handle at COMPILE time per node instance (handles are refcounted members, never memcpy'd; RT never touches the cache). Silent-but-parameterized until the media-library wire lands. 22 contract descriptors (kSamplerParams)>>
+        <<DeviceTypeId 3 "Sampler" - melodic one-sample player on PolyInstrument (pool 16, poly 8); zones/layers/SFZ are MultiSampler's milestone. Sample residency protocol LIVE (v1.2): the MODEL owns the assignment (ModelSampleRef slot 0); GraphBuilder.pinDeviceSamples resolves it and calls setSample() with a cache-pinned handle at COMPILE time per node instance (handles are refcounted members, never memcpy'd; RT never touches the cache; shared_.fileId is bookkeeping that may trail one adopt behind - the handle is truth). 22 contract descriptors (kSamplerParams)>>
         +setSample(id: FileId, handle: SampleHandle)
         +paramCount() / paramDescriptor(i)
         +setParamImmediate(dense, plain)
@@ -872,6 +900,7 @@ classDiagram
     DrumRackDevice *-- DrumRackShared
     DrumRackShared *-- DrumPadShared
     DrumRackDevice ..> DrumKitDefault
+    DrumRackDevice ..> SampleHandle
     PolyInstrument~VoiceT_SharedT_StateVersion_PoolVoices_DefaultPolyphony~ <|-- SimpleSampler
     SimpleSampler *-- SamplerVoice
     SimpleSampler *-- SamplerShared
@@ -976,12 +1005,12 @@ classDiagram
 
     %% ---- M1 graph/ (GraphBuilder - the background compile thread) ----
     class GraphBuilder {
-        <<owns EngineModel + the compile thread (50ms wait_for cycle): drains ModelDelta bundle inbox (mutex+condvar; single engine-io producer preserves edit order), applies deltas, rebuilds dirty artifacts - TimelineSnapshot (exact-reserve flat stores), TempoMapBase from model tempo deltas (rate-gated, retried) or forced tail consolidation (samples the SAME governing function at boundary beats; equal-tempo merges preserve post-seek discontinuities; skipped while an offer is in flight). All handovers via OfferSlot epochs; only this thread frees retired artifacts (after RT ack; tempo bg pointer republished once predecessor ack proves the claim). Device adopt entries hash their TYPE - a same-uid type swap never migrates one synth's Shared POD into another's layout (per-type state versions make cross-type version equality meaningless). PlaybackGraph compile joins at M2>>
+        <<owns EngineModel + the compile thread (50ms wait_for cycle): drains ModelDelta bundle inbox (mutex+condvar; single engine-io producer preserves edit order), applies deltas, rebuilds dirty artifacts - TimelineSnapshot (exact-reserve flat stores), PlaybackGraph, PreviewClip (buildPreview: cache-acquires the model's audition request; fileId 0 = stop artifact; a decode failure offers an EMPTY handle so a failed preview silences the previous one), TempoMapBase from model tempo deltas (rate-gated, retried) or forced tail consolidation (samples the SAME governing function at boundary beats; equal-tempo merges preserve post-seek discontinuities; skipped while an offer is in flight). pinDeviceSamples at graph compile resolves ModelSampleRefs into just-created type-3/type-6 instances (frozen-type-id downcasts, same justification as the isInstrument cast; acquire's decode blocks THIS thread - fine for one-shots, the media-io thread pre-pins from M6). All handovers via OfferSlot epochs; only this thread frees retired artifacts (after RT ack; tempo bg pointer republished once predecessor ack proves the claim). Device adopt entries hash their TYPE - a same-uid type swap never migrates one synth's Shared POD into another's layout (per-type state versions make cross-type version equality meaningless)>>
         +start()
         +stop()
         +submitDeltas(payload, len)
         +nudge()
-        +deltasApplied() / deltasRejected() / timelineBuilds() / tempoBuilds() / danglingRefs()
+        +deltasApplied() / deltasRejected() / timelineBuilds() / tempoBuilds() / previewBuilds() / danglingRefs()
     }
 
     GraphBuilder *-- EngineModel
@@ -990,6 +1019,10 @@ classDiagram
     GraphBuilder ..> StateCodec
     GraphBuilder ..> ModelDeltaEnvelope
     GraphBuilder ..> AudioEngine
+    GraphBuilder ..> PreviewClip
+    GraphBuilder ..> SampleCache
+    GraphBuilder ..> SimpleSampler
+    GraphBuilder ..> DrumRackDevice
 
     %% ---- M0 jni/ (NEW ENGINE - seam-5 wire codecs + the one JNI TU) ----
     class FrameHeader {
@@ -1004,7 +1037,7 @@ classDiagram
         +writeFrameHeader(dst, dstLen, kind, payloadLen) size_t
     }
     class StateCodec {
-        <<pure static entity-delta codec (model deltas -> EngineModel builder, M1): contract-ordered 16-byte header read field-wise (u64 unaligned at offset 4); idempotent upserts/removes, no backpressure on the builder path>>
+        <<pure static entity-delta codec (model deltas -> EngineModel builder, M1): contract-ordered 16-byte header read field-wise (u64 unaligned at offset 4); idempotent upserts/removes, no backpressure on the builder path; known-kind gate widened through Preview (v1.2 consumed)>>
         +decode(data, len, visitor) Result
         +writeDeltaHeader(dst, dstLen, kind, entityId, payloadLen) size_t
     }
@@ -1037,6 +1070,9 @@ classDiagram
     }
     class SceneDeltaPayload {
         <<8B: index + reserved flags>>
+    }
+    class SampleRefDeltaHead {
+        <<16B head (v1.2, entityId = device uid): slot + pad + fileId, followed by the UTF-8 path; fileId 0 clears the slot, byteLen 0 removes the device's refs>>
     }
     class TempoMapDeltaHead {
         <<8B head: tempoCount + sigCount, followed by TempoEventRecords then SigEventRecords>>
@@ -1098,11 +1134,11 @@ classDiagram
     }
 
     class DawRuntime {
-        <<object; process-scoped composition root: the one ProjectStore + engine trio live here so audio survives rotation/navigation (spec Part 1 §15); idempotent ensureStarted from activity onCreate>>
+        <<object; process-scoped composition root: the one ProjectStore + engine trio live here so audio survives rotation/navigation (spec Part 1 §15); idempotent ensureStarted(context) from activity onCreate also kicks the FactoryPack install on an IO scope (application context only)>>
         +ProjectStore store
         +EngineController controller
         +EngineReadback readback
-        +ensureStarted()
+        +ensureStarted(context: Context)
     }
 
     class MainDawScreen {
@@ -1312,7 +1348,7 @@ classDiagram
     }
 
     class ProjectAction {
-        <<sealed interface>>
+        <<sealed interface; v1.2 media additions: AssignSampleToDevice (trackId, deviceId, slot, fileId, path, name - a document edit, undoable; fileId 0 clears) and transient PreviewSample/StopPreview (state-untouched, undo-excluded like ToggleMetronome - EngineSync forwards them because dispatch notifies unconditionally)>>
     }
 
     class TrackModel {
@@ -1443,15 +1479,25 @@ classDiagram
         RIMSHOT
     }
 
+    class SampleRef {
+        <<data class (v1.2): one sample assignment on a device slot - fileId (fnv1a64 of the library-relative path), absolute path for engine miss-loads, display name>>
+        +Long fileId
+        +String path
+        +String name
+    }
+
     class DeviceModel {
-        <<data class>>
+        <<data class; sampleRefs: slot 0 = the sampler's sample, pad index for the drum rack>>
         +String id
         +DeviceType type
         +String name
         +Boolean isEnabled
         +Boolean isFolded
         +Map~String, Float~ params
+        +Map~Int, SampleRef~ sampleRefs
     }
+
+    DeviceModel *-- SampleRef
 
     class DeviceType {
         <<enumeration>>
@@ -1568,20 +1614,29 @@ classDiagram
     }
 
     class BrowserItem {
-        <<data class>>
+        <<data class; sample != null marks a playable media row (preview + one-tap load)>>
         +String id
         +String name
         +BrowserCategory category
         +List~String~ tags
         +String author
+        +FactorySample? sample
     }
 
+    BrowserItem ..> FactorySample
+
     class SoundBrowserStateHolder {
+        <<preset rows + the FactoryPack samples merged reactively into SAMPLES_LOOPS (BrowserItem.sample marks playable media). togglePreview dispatches PreviewSample/StopPreview (toggle semantics; previewingItemId is holder-local UI state); assignToSampler loads slot 0 of the selected track's first SAMPLER (fallback: first sampler anywhere) AND sends sample.root as an ordinary param so playback is in key; drum-pad drag assignment joins the drum lab pass>>
         +StateFlow~BrowserUiState~ state
         +selectCategory(cat: BrowserCategory)
         +search(query: String)
         +toggleTag(tag: String)
+        +togglePreview(item: BrowserItem)
+        +stopPreview()
+        +assignToSampler(item: BrowserItem) Boolean
     }
+
+    SoundBrowserStateHolder ..> FactoryPack
 
     class MasteringStateHolder {
         +StateFlow~MasteringUiState~ state
@@ -1592,8 +1647,20 @@ classDiagram
     }
 
     %% ==========================================
-    %% 6. PERSISTENCE (ROOM)
+    %% 6. PERSISTENCE (ROOM) + MEDIA LIBRARY
     %% ==========================================
+    class FactoryPack {
+        <<object (data.media): the generated factory starter library (spec P1 §12). Eight one-shot WAVs SYNTHESIZED deterministically on first run into filesDir/factory/v1 (fixed-seed LCG noise; 44.1k mono 16-bit; write-to-tmp + rename so a killed first run never half-installs behind the .complete marker) - no binaries in repo or APK. Recipes: 808 kick (exp pitch drop + tanh drive), two-component snare, four-burst room clap, 808 metal-cluster hats (closed/open), Karplus-Strong pluck C3, filtered saw+sub bass C2, detuned Am stab. fileId = fnv1a64 of the LIBRARY-RELATIVE path (stable across devices while absolute paths differ); rootNote metadata keys melodic assignment>>
+        +StateFlow~List~FactorySample~~ samples
+        +ensureInstalled(context)
+    }
+    class FactorySample {
+        <<data class: library-relative id, display name, absolute path, fileId, rootNote, Target (DRUM_PAD|MELODIC), tags>>
+    }
+
+    FactoryPack *-- FactorySample
+    FactoryPack ..> WireProtocol
+
     class DawDatabase {
         <<abstract>>
         +projectDao() ProjectDao
@@ -1624,7 +1691,7 @@ classDiagram
     %% 7. KOTLIN ENGINE BRIDGE (com.example.synth.engine)
     %% ==========================================
     class WireProtocol {
-        <<object; single Kotlin source of seam-5 truth: frame kinds/versions, EngineMessage family+op numbering, status/meter layouts, native result codes, and bit-exact fnv1a32/fnv1a64/makeNodeUid mirrors of NodeUid.h>>
+        <<object; single Kotlin source of seam-5 truth: frame kinds/versions (entity kinds through v1.2 SampleRef=10/Preview=11), EngineMessage family+op numbering, status/meter layouts, native result codes, and bit-exact fnv1a32/fnv1a64/makeNodeUid mirrors of NodeUid.h>>
         +paramKey(key: String) Int
         +fnv1a64(s: String) Long
         +makeNodeUid(kind: String, entityId: String) Long
@@ -1699,6 +1766,9 @@ classDiagram
         +upsertContent(uid, lengthBeats, notes: List~WireNote~)
         +upsertDevice(uid, trackUid, type, enabled, order)
         +upsertScene(uid, index)
+        +sampleRef(deviceUid, slot, fileId, path)
+        +preview(fileId, path)
+        +previewStop()
         +tempoMap(events, sigNumerator, sigDenominator)
         +remove(entityKind, uid)
         +build() ByteArray
@@ -1719,7 +1789,7 @@ classDiagram
         +estimatedSamplePos(nowNanos: Long) Long
     }
     class EngineSync {
-        <<the change-classification seam (dual-model), complete for M1: transport intents -> messages, param moves -> Param/Move, structure edits -> ModelDelta bundles - all stamped with the store's real editSeq. Cascading removes derive from the PRE-change state; shared ClipContent removed only when unreferenced in post-state; canonical content id of a linked arr/session pair = lexicographic MIN of the clip ids (forward-compatible with explicit ClipContent + copy-on-unlink at the session milestone). Drum steps flatten to NoteRecords via DrumPadType.midiPitch with stable fnv32 step ids. Session intents (M4) -> seam-2 Session ops: a slot press launches the clip at that slot or, empty, sends the stop (mirroring the reducer's isPlaying marks); TriggerScene fans one launch/stop per track in ONE flush so every lane shares the boundary; the store's isPlaying/isOverriddenBySession flags are the optimistic UI (engine slot readback deferred). NULL store action (undo/redo) and every RUNNING transition -> full model push + param resend (idempotent wholesale resync)>>
+        <<the change-classification seam (dual-model), complete for M1: transport intents -> messages, param moves -> Param/Move, structure edits -> ModelDelta bundles - all stamped with the store's real editSeq. Cascading removes derive from the PRE-change state; shared ClipContent removed only when unreferenced in post-state; canonical content id of a linked arr/session pair = lexicographic MIN of the clip ids (forward-compatible with explicit ClipContent + copy-on-unlink at the session milestone). Drum steps flatten to NoteRecords via DrumPadType.midiPitch with stable fnv32 step ids. Session intents (M4) -> seam-2 Session ops: a slot press launches the clip at that slot or, empty, sends the stop (mirroring the reducer's isPlaying marks); TriggerScene fans one launch/stop per track in ONE flush so every lane shares the boundary; the store's isPlaying/isOverriddenBySession flags are the optimistic UI (engine slot readback deferred). Media (v1.2): AssignSampleToDevice -> one SampleRef frame keyed by the device uid; PreviewSample/StopPreview -> Preview frames (transient, ride the same ordered delta path); full pushes emit every device's refs; device/track removals send explicit SampleRef removes (the model never cascades). NULL store action (undo/redo) and every RUNNING transition -> full model push + param resend (idempotent wholesale resync)>>
         +attach()
         +detach()
         +pushFullModel(state, editSeq)
@@ -1752,6 +1822,7 @@ classDiagram
     DawRuntime *-- EngineController
     DawRuntime *-- EngineReadback
     DawRuntime *-- EngineSync
+    DawRuntime ..> FactoryPack
     NativeAudioBridge ..> BridgeHandle : JNI (seam 5)
 
     MainActivity ..> MainDawScreen

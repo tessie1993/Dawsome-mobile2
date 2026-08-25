@@ -320,6 +320,24 @@ class ProjectStore(
             )
 
             is ProjectAction.SetMasterVolume -> current.copy(masterVolumeDb = action.volumeDb)
+
+            is ProjectAction.AssignSampleToDevice -> current.copy(
+                tracks = current.tracks.map { track ->
+                    if (track.id != action.trackId) track
+                    else track.copy(devices = track.devices.map { dev ->
+                        if (dev.id != action.deviceId) dev
+                        else dev.copy(
+                            sampleRefs =
+                                if (action.fileId == 0L) dev.sampleRefs - action.slot
+                                else dev.sampleRefs +
+                                    (action.slot to SampleRef(action.fileId, action.path, action.name))
+                        )
+                    })
+                }
+            )
+            // Auditions are engine-transient: EngineSync forwards them, the
+            // document does not change.
+            is ProjectAction.PreviewSample, is ProjectAction.StopPreview -> current
         }
     }
 
@@ -327,6 +345,7 @@ class ProjectStore(
         return when (action) {
             is ProjectAction.Play, is ProjectAction.Stop, is ProjectAction.TogglePlay,
             is ProjectAction.ToggleMetronome,   // transport toggle, not a document edit
+            is ProjectAction.PreviewSample, is ProjectAction.StopPreview,   // transient auditions
             is ProjectAction.SeekToBeat, is ProjectAction.SelectTab, is ProjectAction.SelectTrack -> false
             else -> true
         }

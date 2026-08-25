@@ -12,6 +12,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material3.Icon
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
@@ -22,7 +23,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.example.ui.components.earth.InteractiveWaveformCanvas
 import com.example.ui.state.BrowserCategory
 import com.example.ui.state.SoundBrowserStateHolder
 import com.example.ui.theme.earth.EarthColorTokens
@@ -164,21 +164,43 @@ fun SoundBrowserScreen(
                         }
 
                         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                            Box(
-                                modifier = Modifier
-                                    .clip(RoundedCornerShape(3.dp))
-                                    .background(EarthColorTokens.GlassSurface)
-                                    .border(0.5.dp, EarthColorTokens.GlassBorderSubtle, RoundedCornerShape(3.dp))
-                                    .padding(4.dp)
-                            ) {
-                                Icon(Icons.Default.PlayArrow, contentDescription = "Audition", tint = EarthColorTokens.EarthAmber, modifier = Modifier.size(14.dp))
+                            // Audition rides the engine's preview lane (spec P1
+                            // §12): only rows backed by real media offer it.
+                            if (item.sample != null) {
+                                val isAuditioning = state.previewingItemId == item.id
+                                Box(
+                                    modifier = Modifier
+                                        .clip(RoundedCornerShape(3.dp))
+                                        .background(
+                                            if (isAuditioning) EarthColorTokens.EarthAmber.copy(alpha = 0.25f)
+                                            else EarthColorTokens.GlassSurface
+                                        )
+                                        .border(
+                                            0.5.dp,
+                                            if (isAuditioning) EarthColorTokens.EarthAmber
+                                            else EarthColorTokens.GlassBorderSubtle,
+                                            RoundedCornerShape(3.dp)
+                                        )
+                                        .clickable { browserStateHolder.togglePreview(item) }
+                                        .padding(4.dp)
+                                ) {
+                                    Icon(
+                                        if (isAuditioning) Icons.Default.Stop else Icons.Default.PlayArrow,
+                                        contentDescription = if (isAuditioning) "Stop audition" else "Audition",
+                                        tint = EarthColorTokens.EarthAmber,
+                                        modifier = Modifier.size(14.dp)
+                                    )
+                                }
                             }
 
                             Box(
                                 modifier = Modifier
                                     .clip(RoundedCornerShape(3.dp))
                                     .background(EarthColorTokens.EarthAmber)
-                                    .clickable { onLoadItem(item.id) }
+                                    .clickable {
+                                        if (item.sample != null) browserStateHolder.assignToSampler(item)
+                                        else onLoadItem(item.id)
+                                    }
                                     .padding(horizontal = 6.dp, vertical = 4.dp)
                             ) {
                                 Text("LOAD", style = EarthTheme.typography.microBadge, color = Color.Black)

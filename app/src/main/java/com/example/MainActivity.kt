@@ -12,7 +12,7 @@ import com.example.ui.theme.earth.EarthTheme
 class MainActivity : ComponentActivity() {
   override fun onCreate(savedInstanceState: Bundle?) {
     super.onCreate(savedInstanceState)
-    DawRuntime.ensureStarted()
+    DawRuntime.ensureStarted(this)
     enableEdgeToEdge()
     setContent {
       EarthTheme {

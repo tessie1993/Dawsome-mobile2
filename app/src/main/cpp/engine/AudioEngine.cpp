@@ -30,6 +30,7 @@ bool AudioEngine::start(const OboeDriver::Config& cfg) noexcept {
     if (driver_.sampleRate() != transport_.tempoMap().sampleRate())
         transport_.prepare(driver_.sampleRate());
     metronome_.prepare(driver_.sampleRate());
+    preview_.prepare(driver_.sampleRate(), previewOffer_);
     return driver_.start();
 }
 
@@ -268,6 +269,11 @@ void AudioEngine::render(float* const* outputs, int numFrames,
     //     never recorded, never metered, unaffected by the mix (§3.2; Cue
     //     folds into Main until unfolded routing exists).
     metronome_.render(outputs[0], outputs[1], numFrames);
+
+    // 6c) Browser audition on the same cue-fold lane: claims any offered
+    //     PreviewClip at this block boundary, then adds the one-shot with
+    //     the player's click-free fade discipline.
+    preview_.process(previewOffer_, outputs[0], outputs[1], numFrames);
 
     // 7) Publish the block clock from the real transport.
     TransportClockData d;
