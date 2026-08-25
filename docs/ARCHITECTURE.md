@@ -38,13 +38,6 @@ classDiagram
     PlaybackEngine <|-- ArrangementEngine
     PlaybackEngine <|-- SessionEngine
 
-    %% Kotlin MIDI Effects
-    MidiEffectDevice <|-- RealtimeArpeggiator
-    MidiEffectDevice <|-- RealtimeChordDevice
-    MidiEffectDevice <|-- RealtimeScaleDevice
-    MidiEffectDevice <|-- RealtimeVelocityDevice
-    MidiEffectDevice <|-- RealtimeNoteEchoDevice
-
     %% ==========================================
     %% 1. NATIVE REAL-TIME C++ AUDIO ENGINE (NDK)
     %% ==========================================
@@ -796,109 +789,7 @@ classDiagram
     }
 
     %% ==========================================
-    %% 6. MIDI & MODULATION ENGINES
-    %% ==========================================
-    class MidiTransformations {
-        <<object>>
-        +quantize(notes, gridBeat, amount) List~MidiNote~
-        +humanize(notes, timingDevBeats, velocityDev) List~MidiNote~
-        +strum(notes, delayPerNoteBeats, isUpward) List~MidiNote~
-        +chop(notes, divisions) List~MidiNote~
-        +scaleConstrain(notes, rootNote, scale) List~MidiNote~
-        +transpose(notes, semitones) List~MidiNote~
-        +invert(notes) List~MidiNote~
-        +reverse(notes) List~MidiNote~
-    }
-
-    class MidiGenerators {
-        <<object>>
-        +generateEuclidean(steps, pulses, pitch, stepBeat, velocity) List~MidiNote~
-        +generateChordProgression(rootNote, scale, progressionDegrees, beatsPerChord) List~MidiNote~
-        +generateBassline(rootNote, scale, totalBars, density) List~MidiNote~
-    }
-
-    class MidiEffectDevice {
-        <<interface>>
-        +String id
-        +String name
-        +Boolean isEnabled
-        +process(notes: List~MidiNote~, currentBeat: Float) List~MidiNote~
-    }
-
-    class RealtimeArpeggiator {
-        +ArpStyle style
-        +Float rateBeat
-        +Int octaveRange
-        +Float gate
-    }
-
-    class RealtimeChordDevice {
-        +List~Int~ intervals
-    }
-
-    class RealtimeScaleDevice {
-        +Int rootNote
-        +MusicalScale scale
-    }
-
-    class RealtimeVelocityDevice {
-        +Float gain
-        +Float randomizeAmount
-    }
-
-    class RealtimeNoteEchoDevice {
-        +Int repeats
-        +Float delayBeats
-        +Float decay
-        +Int pitchShiftPerRepeat
-    }
-
-    class ModulationMatrixEngine {
-        +List~ModMatrixRoute~ routes
-        +addRoute(source: ModSource, destination: ModDestination, depth: Float)
-        +removeRoute(id: String)
-        +computeDestinationModulation(destination, sampleRate, lfo1RateHz, lfo2RateHz, lfo3RateHz, velocity, modWheel) Float
-    }
-
-    class ModMatrixRoute {
-        <<data class>>
-        +String id
-        +ModSource source
-        +ModDestination destination
-        +Float depth
-        +Boolean isBipolar
-        +Boolean isEnabled
-    }
-
-    class ModSource {
-        <<enumeration>>
-        LFO_1
-        LFO_2
-        LFO_3
-        ENV_AMP
-        ENV_FILTER
-        ENV_MOD
-        VELOCITY
-        MOD_WHEEL
-        KEY_TRACK
-        RANDOM_SH
-    }
-
-    class ModDestination {
-        <<enumeration>>
-        OSC1_PITCH
-        OSC2_PITCH
-        WT_POSITION
-        FM_DEPTH
-        FILTER_CUTOFF
-        FILTER_RESO
-        DRIVE
-        PAN
-        REVERB_SEND
-    }
-
-    %% ==========================================
-    %% 7. PERSISTENCE & AUDIO EXPORT
+    %% 6. PERSISTENCE (ROOM)
     %% ==========================================
     class DawDatabase {
         <<abstract>>
@@ -926,27 +817,8 @@ classDiagram
         +String projectDataJson
     }
 
-    class AudioRecorderEngine {
-        +Boolean isRecording
-        +Float inputRmsLevel
-        +Float inputPeakLevel
-        +startRecording()
-        +stopRecording(destinationWavFile: File?) ShortArray
-    }
-
-    class StemExporter {
-        <<object>>
-        +exportProjectStems(projectState, outputDir, sampleRate, renderBars) List~File~
-        +packageStemsToZip(stemFiles, zipOutputFile) File
-    }
-
-    class WavWriter {
-        <<object>>
-        +createWavFile(file: File, pcmData: ShortArray, sampleRate: Int, channels: Int)
-    }
-
     %% ==========================================
-    %% 8. RELATIONSHIPS & DEPENDENCY FLOW
+    %% 7. RELATIONSHIPS & DEPENDENCY FLOW
     %% ==========================================
     AudioEngine *-- AudioGraph
     AudioEngine *-- TransportEngine
@@ -1015,12 +887,5 @@ classDiagram
     SoundBrowserStateHolder --> ProjectStore
     MasteringStateHolder --> ProjectStore
 
-    ModulationMatrixEngine *-- ModMatrixRoute
-    ModMatrixRoute --> ModSource
-    ModMatrixRoute --> ModDestination
-
     DawDatabase *-- ProjectDao
-
-    AudioRecorderEngine ..> WavWriter
-    StemExporter ..> WavWriter
 ```
