@@ -106,18 +106,25 @@ void AudioEngine::render(float* const* outputs, int numFrames,
     });
     midiParams_.drainDirty([](NodeUid, ParamKeyHash, double, uint32_t) {});
 
-    // 3) Block-boundary swaps + transport advance. Claim any offered
-    //    timeline (ack retires the predecessor - the builder frees it only
-    //    after this ack); the transport's advance() claims offered tempo
-    //    bases the same way and splits the block at a loop wrap. Spans drive
-    //    the MidiScheduler (M1 f3) and the graph render (M2).
+    // 3) Block-boundary swaps + transport advance + MIDI scheduling. Claim
+    //    any offered timeline (ack retires the predecessor - the builder
+    //    frees it only after this ack; the scheduler reconciles sounding
+    //    notes against the new snapshot); the transport's advance() claims
+    //    offered tempo bases the same way and splits the block at a loop
+    //    wrap. Scheduled events feed instruments from M4.
+    midiScheduler_.beginBlock();
     if (TimelineSnapshot* ts = timelineOffer_.claim()) {
         const TimelineSnapshot* retired = timeline_;
         timeline_ = ts;
         if (retired != nullptr) timelineOffer_.ackRetired(retired->epoch);
+        midiScheduler_.onTimelineSwap(timeline_);
     }
     TransportSpan spans[2];
-    transport_.advance(numFrames, spans);
+    const int spanCount = transport_.advance(numFrames, spans);
+    for (int s = 0; s < spanCount; ++s) {
+        midiScheduler_.scheduleSpan(timeline_, spans[s],
+                                    transport_.tempoMap(), transport_.playing());
+    }
 
     // 4) Keep the duplex input flowing (monitor/record taps arrive M2/M6).
     float* ins[kMaxChannels] = { inScratchL_, inScratchR_ };

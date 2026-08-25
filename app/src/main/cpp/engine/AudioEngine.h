@@ -11,6 +11,7 @@
 #include "../core/Seqlock.h"
 #include "../core/SpscRing.h"
 #include "../core/TimeAnchor.h"
+#include "../sequencer/MidiScheduler.h"
 #include "../sequencer/TimelineSnapshot.h"
 #include "../sequencer/TransportEngine.h"
 #include "OboeDriver.h"
@@ -78,6 +79,8 @@ public:
     OfferSlot<TimelineSnapshot>& timelineOffer() noexcept { return timelineOffer_; }
     // [RT] the currently installed timeline (null before the first claim).
     const TimelineSnapshot* timeline() const noexcept { return timeline_; }
+    // [RT] block-local scheduled MIDI (instruments consume from M4).
+    const MidiScheduler& midi() const noexcept { return midiScheduler_; }
     uint64_t droppedNotes() const noexcept { return droppedNotes_.load(std::memory_order_relaxed); }
     uint64_t panics() const noexcept { return panics_.load(std::memory_order_relaxed); }
 
@@ -108,6 +111,8 @@ private:
     // Compiled-timeline handover (builder offers, RT claims + acks).
     OfferSlot<TimelineSnapshot> timelineOffer_;
     const TimelineSnapshot* timeline_ = nullptr;   // RT-owned current pointer
+
+    MidiScheduler midiScheduler_;
 
     std::unique_ptr<GraphBuilder> builder_;
 

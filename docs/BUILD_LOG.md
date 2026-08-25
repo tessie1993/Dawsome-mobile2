@@ -6,6 +6,28 @@ Newest entry first. Each entry: where the build stands, what comes next.
 
 ---
 
+## 2026-08-25 — M1 feature 3 done: MidiScheduler
+
+`sequencer/MidiEvent.h` (the seam-1 MidiEventSpan types; OFF sorts before ON
+at equal offsets) + `sequencer/MidiScheduler.h`. Design rule: positional
+facts (which notes start in a span, loop-pass indices, the future
+probability seed inputs) are derived from the TransportSpan + clip geometry,
+never accumulated — the sounding-note table is the ONLY state. Stuck-note
+guarantees, end to end: beat-mapped OFFs, flush on stop/seek/loop-wrap,
+synthetic OFFs on timeline swaps (matched by content id while downstream
+voices key on per-pass instance ids so loop retriggers never collide), and
+an admission invariant (capacity − poolSize ≥ soundingCount) that reserves a
+pool slot for every future OFF — emitOff cannot fail, mirroring EventRing's
+reserved-OFF rule. Output = flat pool + per-track segments sorted (offset,
+OFF-before-ON). AudioEngine drives it per block: beginBlock → swap
+reconcile → schedule per transport span; instruments consume at M4.
+Map: 136 classes, sweep green.
+
+**Next: M1 feature 4 (final)** — Kotlin model v2 additions (stable entity
+ids, shared ClipContent for linked clips), ProjectStore editSeq stamping,
+EngineSync structure-delta serialization (ModelDeltaEnvelope + StateCodec
+frames via a new DeltaEncoder), full-model push on attach. That closes M1.
+
 ## 2026-08-25 — M1 feature 2 done: EngineModel + TimelineSnapshot + GraphBuilder
 
 The builder side of the dual-model architecture is live:

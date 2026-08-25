@@ -321,6 +321,38 @@ classDiagram
     TimelineSnapshot *-- TrackTimeline
     ClipView ..> NoteSpan
 
+    %% ---- M1 sequencer/ (MidiScheduler - sample-accurate note scheduling) ----
+    class MidiEvent {
+        <<24B block-local event (offset indexes block buffers; OFF sorts before ON at equal offsets)>>
+        +NodeUid trackUid
+        +uint32_t noteId
+        +int32_t sampleOffset
+        +uint16_t pitch
+        +uint8_t type
+        +uint8_t velocity
+    }
+    class MidiEventSpan {
+        <<the seam-1 read window ProcessContext carries (pointer + count)>>
+        +begin() / end() / size() / empty()
+    }
+    class MidiScheduler {
+        <<[RT] allocation-free scheduling from the installed TimelineSnapshot: positional facts (starting notes, loop-pass index, future probability seeds) DERIVED from the TransportSpan, never accumulated - only state is the sounding-note table. Stuck-note guarantees: mapped OFFs, flush on stop/seek/wrap, synthetic OFFs on snapshot swap (matched by content id; loop passes get fresh instance ids), admission invariant reserves one pool slot per sounding note so emitOff is infallible, refused ONs counted. Output: flat event pool + per-track segments sorted (offset, OFF-before-ON); instruments consume from M4; MidiClipPlayer (comping/MPE/probability state) grows out at M7>>
+        +beginBlock()
+        +onTimelineSwap(t: TimelineSnapshot*)
+        +scheduleSpan(timeline, span: TransportSpan, map: TempoMap, playing)
+        +allNotesOff(sampleOffset)
+        +events() FixedVector~MidiEvent~
+        +segments() FixedVector~TrackEvents~
+        +scheduledOns() / scheduledOffs() / syntheticOffs() / overflowDrops()
+    }
+
+    MidiScheduler ..> TimelineSnapshot
+    MidiScheduler ..> TempoMap
+    MidiScheduler ..> TransportSpan
+    MidiScheduler *-- MidiEvent
+    MidiScheduler ..> MidiEventSpan
+    AudioEngine *-- MidiScheduler
+
     %% ---- M0 engine/ (NEW ENGINE - driver + callback spine) ----
     class StreamTime {
         <<per-callback DAC anchor from Oboe stream timestamps>>
@@ -374,6 +406,7 @@ classDiagram
         +builder() GraphBuilder
         +timelineOffer() OfferSlot~TimelineSnapshot~
         +timeline() TimelineSnapshot*
+        +midi() MidiScheduler
         +render(outputs, numFrames, input, time)
     }
 
