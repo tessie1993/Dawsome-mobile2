@@ -9,12 +9,16 @@ threading contracts and seam contracts — **no code**. `docs/ARCHITECTURE.md`
 remains the living map of code that exists; classes graduate from this blueprint
 into that map as they land.
 
-Authority order: the two spec documents → this blueprint → the living map.
-Rev 2 incorporates all blocking findings of DSP review round 1 (command
-architecture, duplex I/O, recording alignment, rate policy, swap/adoption
-protocol, edit sequencing, timeline change class, sync placement, bypass/PDC,
-voice budget, cue bus, warp budget, stable param identity, MP3 removal,
-contracts layer) plus its recommendations and coverage gaps.
+Authority order: the two spec documents → this blueprint → `CONTRACTS.md` →
+the living map.
+Rev 3 carries the resolutions of all 17 blocking findings from DSP review
+rounds 1–2 (command architecture, duplex I/O, recording alignment, rate
+policy, swap/adoption protocol, edit sequencing, timeline change class, sync
+placement, bypass/PDC, voice budget, cue bus, warp budget, stable param
+identity end-to-end, MP3 removal, contracts layer, and the TempoMap seqlock
+design) plus all recommendations and coverage gaps. **Reviewer verdict:
+APPROVED (round 3) — implementation proceeds from M0 on the condition that
+`docs/spec/CONTRACTS.md` is authored first and contracts change only there.**
 
 Research grounding: Tracktion Engine (model/playback-graph separation, pooled
 buffers, latency balancing, background stretch), Google Oboe guidance
