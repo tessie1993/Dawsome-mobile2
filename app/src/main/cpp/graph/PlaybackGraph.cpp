@@ -36,7 +36,9 @@ inline ProcessContext contextFor(float* const* bufs, int n,
 
 } // namespace
 
-void PlaybackGraph::processBlock(int numFrames, const RenderFacts& facts) noexcept {
+void PlaybackGraph::processBlock(int numFrames, const RenderFacts& facts,
+                                 const MidiEvent* midiPool,
+                                 const MidiTrackRun* runs, size_t runCount) noexcept {
     pendingMeters.clear();
     const int n = numFrames > kMaxBlock ? kMaxBlock : numFrames;
     if (n <= 0) return;
@@ -60,6 +62,16 @@ void PlaybackGraph::processBlock(int numFrames, const RenderFacts& facts) noexce
 
         float* bufs[2] = {t.bufL, t.bufR};
         ProcessContext ctx = contextFor(bufs, n, facts);
+        MidiEventSpan midi;
+        if (midiPool != nullptr) {
+            for (size_t k = 0; k < runCount; ++k) {
+                if (runs[k].trackUid == t.uid) {
+                    midi = MidiEventSpan(midiPool + runs[k].first, runs[k].count);
+                    break;
+                }
+            }
+        }
+        ctx.midiIn = &midi;
         if (t.chain != nullptr) t.chain->process(ctx);
         t.strip->process(ctx);
 

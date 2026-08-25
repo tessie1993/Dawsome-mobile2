@@ -44,4 +44,14 @@ private:
     size_t count_ = 0;
 };
 
+// One track's contiguous, (offset, OFF-before-ON)-sorted run inside a
+// block's event pool - the scheduler's finalizeBlock() product and the
+// graph's per-lane midiIn source. Lives in core so graph and sequencer
+// share it without a sibling include.
+struct MidiTrackRun {
+    NodeUid  trackUid = 0;
+    uint32_t first = 0;      // index into the block's event pool
+    uint32_t count = 0;
+};
+
 } // namespace daw

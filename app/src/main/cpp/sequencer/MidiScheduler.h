@@ -40,11 +40,7 @@ namespace daw {
 
 class MidiScheduler {
 public:
-    struct TrackEvents {
-        NodeUid  trackUid = 0;
-        uint32_t first = 0;      // index into events()
-        uint32_t count = 0;
-    };
+    using TrackEvents = MidiTrackRun;   // core handoff type (graph consumes)
 
     static constexpr int kEventCap    = 2048;
     static constexpr int kSoundingCap = 512;
@@ -103,6 +99,35 @@ public:
         const size_t rangeStart = pool_.size();
         flushSounding(sampleOffset);
         closeRange(rangeStart);
+    }
+
+    // After the last scheduleSpan of the block: globally sort the pool by
+    // (track, offset, OFF-before-ON) and rebuild segments as ONE contiguous
+    // run per track - the shape instruments consume through ctx.midiIn.
+    // Equal-key events (a chord's ONs) may order arbitrarily.
+    void finalizeBlock() noexcept {
+        if (pool_.empty()) {
+            segments_.clear();
+            return;
+        }
+        std::sort(pool_.begin(), pool_.end(),
+                  [](const MidiEvent& a, const MidiEvent& b) {
+                      if (a.trackUid != b.trackUid) return a.trackUid < b.trackUid;
+                      if (a.sampleOffset != b.sampleOffset) return a.sampleOffset < b.sampleOffset;
+                      return a.type < b.type;
+                  });
+        segments_.clear();
+        size_t runStart = 0;
+        for (size_t i = 1; i <= pool_.size(); ++i) {
+            if (i == pool_.size() || pool_[i].trackUid != pool_[runStart].trackUid) {
+                if (!segments_.full()) {
+                    segments_.push_back({pool_[runStart].trackUid,
+                                         static_cast<uint32_t>(runStart),
+                                         static_cast<uint32_t>(i - runStart)});
+                }
+                runStart = i;
+            }
+        }
     }
 
     // ---- output [RT, valid until the next beginBlock] -----------------------

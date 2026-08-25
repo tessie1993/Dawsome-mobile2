@@ -6,9 +6,17 @@
 #include <utility>
 
 #include "../device/DeviceRegistry.h"
+#include "../device/InstrumentNode.h"
 #include "../engine/AudioEngine.h"
 
 namespace daw {
+
+namespace {
+// Type-erased ledger admission for InstrumentNode::setVoiceAdmission.
+bool admitFromLedger(void* ctx) {
+    return static_cast<VoiceBudgetLedger*>(ctx)->requestVoice();
+}
+} // namespace
 
 GraphBuilder::GraphBuilder(AudioEngine& engine) : engine_(engine) {}
 
@@ -338,6 +346,14 @@ void GraphBuilder::buildGraph() {
             }
             if (DeviceNode* old = findPrev(duid, 0))
                 g->migration.add(dev.get(), old, dev->stateBytes());
+            // Instrument wiring: ledger admission + group registration
+            // (registry's isInstrument makes the static_cast safe, no RTTI).
+            if (const auto* info = DeviceRegistry::instance().info(md->type);
+                info != nullptr && info->isInstrument) {
+                auto* inst = static_cast<InstrumentNode*>(dev.get());
+                inst->setVoiceAdmission(&admitFromLedger, &g->voices);
+                g->voices.registerGroup(inst->voiceGroup());
+            }
             g->nodeIndex.push_back({duid, dev.get(), 0});
             chain->addDevice(duid, dev.get(), !md->enabled);
             g->nodes.push_back(std::move(dev));

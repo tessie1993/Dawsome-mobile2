@@ -618,6 +618,52 @@ classDiagram
     MacroTable *-- MacroMapping
     ModMatrix *-- ModSlot
 
+    %% ---- M4 device/ (instruments: first sound) ----
+    class MidiTrackRun {
+        <<core handoff POD: one track's contiguous (offset, OFF-before-ON)-sorted run in a block's event pool - MidiScheduler.finalizeBlock's product, the graph's per-lane midiIn source>>
+        +NodeUid trackUid
+        +uint32_t first
+        +uint32_t count
+    }
+    class InstrumentNode {
+        <<abstract; DeviceNode + seam-1 VoiceInterface + the compiler's wiring hooks: voiceGroup() for ledger registration and a type-erased admission callback (ledger requestVoice) consulted before every allocation; registry's isInstrument flag makes the builder's static_cast RTTI-free. registerBuiltinDevices() (RegisterBuiltins.cpp, idempotent, engine-ctor-called) fills the registry as milestones land>>
+        +setVoiceAdmission(fn, ctx)
+        +voiceGroup() VoiceGroup*
+    }
+    class SubtractiveShared {
+        <<POD settings the voices read = the synth's migrating state body: osc waves/detune/semi/mix, noise, cutoff/res/envAmount(oct)/keyTrack, amp+filter ADSR, LFO rate/toPitch/toCutoff, velocity depths, quality>>
+    }
+    class SubtractiveVoice {
+        <<heap-free, trivially copyable virtual-analog voice (researched convention): 2 polyBLEP osc (osc2 detuned, phase-offset) + noise -> Simper SVF lowpass -> analog ADSR VCA; filter/LFO/pitch at control rate (their DSP prepared at rate/16), amp env + oscs at audio rate; velocity scales amp + filter-env depth; VoiceT contract incl. 30ms transient window + 4ms steal fade>>
+        +prepare(sampleRate)
+        +start(pitch, velocity01, shared)
+        +renderAdd(l, r, n, shared)
+        +active() / releasing() / level() / inTransientWindow()
+        +beginRelease() / fastRelease() / kill()
+    }
+    class SubtractiveSynth {
+        <<the first instrument (DeviceTypeId 0): InstrumentNode over VoiceAllocator (pool 16, poly 8); process consumes ctx.midiIn sample-accurately (block split at event offsets; scheduler instance ids key the allocator; the seam-1 live interface maps note number -> id); admission asks the ledger; 24 contract descriptors (kSubtractiveParams). Migration: shared params migrate; sounding voices reset on structural rebuilds (full voice adoption deferred, BUILD_LOG)>>
+        +process(ctx)
+        +setParamImmediate(dense, plain)
+        +noteOn(note, velocity, mpe) / noteOff / allNotesOff / stealVoices
+        +voiceGroup() VoiceGroup*
+        +saveState(out) / loadState(in)
+    }
+
+    DeviceNode <|-- InstrumentNode
+    VoiceInterface <|-- InstrumentNode
+    InstrumentNode <|-- SubtractiveSynth
+    SubtractiveSynth *-- SubtractiveVoice
+    SubtractiveSynth *-- SubtractiveShared
+    SubtractiveSynth ..> VoiceAllocator~VoiceT_MaxVoices~
+    SubtractiveVoice ..> Oscillator
+    SubtractiveVoice ..> SvfFilter
+    SubtractiveVoice ..> AdsrEnvelope
+    SubtractiveVoice ..> Lfo
+    SubtractiveVoice ..> NoiseGen
+    MidiScheduler ..> MidiTrackRun
+    PlaybackGraph ..> MidiTrackRun
+
     %% ---- M2 graph/ (strips + meters) ----
     class TrackStrip {
         <<channel strip AS a DeviceNode (resolver/migration/state uniform): volume (dB->gain at set), constant-power pan (-3dB center, per-channel gain targets), click-free mute; contract keys mixer.volume/pan/mute; gain-domain linear smoothing, current+target migrate (never-jumps); latency 0, configHash 0 (always adoptable); send levels live on SendNodes (M2 f2)>>

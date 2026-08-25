@@ -54,6 +54,7 @@ public:
         Factory factory = nullptr;
         const ParamDescriptor* params = nullptr;   // canonical descriptor set
         int paramCount = 0;
+        bool isInstrument = false;   // safe static_cast to InstrumentNode
     };
 
     static DeviceRegistry& instance() {
@@ -64,7 +65,8 @@ public:
     // [non-RT init] Registers a type; refuses (false) on re-registration or
     // a semantic-key hash collision within the descriptor set.
     bool registerType(DeviceTypeId id, const char* name, Factory factory,
-                      const ParamDescriptor* params, int paramCount) {
+                      const ParamDescriptor* params, int paramCount,
+                      bool isInstrument = false) {
         const auto idx = static_cast<size_t>(id);
         if (present_[idx] || factory == nullptr) {
             DAW_RT_ASSERT(false);
@@ -74,7 +76,7 @@ public:
             DAW_RT_ASSERT(false);
             return false;
         }
-        types_[idx] = {name, factory, params, paramCount};
+        types_[idx] = {name, factory, params, paramCount, isInstrument};
         present_[idx] = true;
         return true;
     }
@@ -111,5 +113,9 @@ private:
     TypeInfo types_[256]{};
     bool present_[256]{};
 };
+
+// Registers every built-in landed so far (RegisterBuiltins.cpp); idempotent,
+// called once at engine construction.
+void registerBuiltinDevices();
 
 } // namespace daw

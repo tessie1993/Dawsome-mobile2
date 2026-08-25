@@ -184,8 +184,12 @@ struct PlaybackGraph {
     // them into the MeterBus ring (single consumer stays engine-side).
     FixedVector<MeterFrame, kMaxTracks + kMaxReturns + 1> pendingMeters;
 
-    // [RT] one whole render slice (numFrames <= kMaxBlock).
-    void processBlock(int numFrames, const RenderFacts& facts) noexcept;
+    // [RT] one whole render slice (numFrames <= kMaxBlock). midiPool/runs
+    // are the scheduler's finalized per-track event runs; each lane's
+    // matching run becomes its chain's ctx.midiIn.
+    void processBlock(int numFrames, const RenderFacts& facts,
+                      const MidiEvent* midiPool,
+                      const MidiTrackRun* runs, size_t runCount) noexcept;
 };
 
 } // namespace daw

@@ -10,6 +10,7 @@ namespace daw {
 // builder_ is the last member: everything it touches (transport, offer
 // slots, rings) is fully constructed before its thread spawns.
 AudioEngine::AudioEngine() : builder_(std::make_unique<GraphBuilder>(*this)) {
+    registerBuiltinDevices();   // idempotent; before the first graph compile
     builder_->start();
 }
 
@@ -149,6 +150,7 @@ void AudioEngine::render(float* const* outputs, int numFrames,
         midiScheduler_.scheduleSpan(timeline_, spans[s],
                                     transport_.tempoMap(), transport_.playing());
     }
+    midiScheduler_.finalizeBlock();   // one sorted run per track for the graph
 
     // 5) Keep the duplex input flowing (monitor/record taps arrive at M6).
     float* ins[kMaxChannels] = { inScratchL_, inScratchR_ };
@@ -163,7 +165,10 @@ void AudioEngine::render(float* const* outputs, int numFrames,
         facts.bpm = transport_.bpm();
         facts.playing = transport_.playing();
         facts.recording = transport_.recording();
-        graph_->processBlock(numFrames, facts);
+        graph_->processBlock(numFrames, facts,
+                             midiScheduler_.events().begin(),
+                             midiScheduler_.segments().begin(),
+                             midiScheduler_.segments().size());
 
         for (int f = 0; f < numFrames; ++f) {
             outputs[0][f] = graph_->mainL[f];

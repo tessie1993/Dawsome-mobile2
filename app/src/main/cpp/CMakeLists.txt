@@ -23,6 +23,7 @@ target_include_directories(dawcore_core INTERFACE ${CMAKE_CURRENT_SOURCE_DIR})
 
 if(ANDROID)
     add_library(dawcore SHARED
+        device/RegisterBuiltins.cpp
         engine/AudioEngine.cpp
         engine/EngineModel.cpp
         engine/OboeDriver.cpp

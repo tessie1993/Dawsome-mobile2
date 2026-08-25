@@ -6,6 +6,38 @@ Newest entry first. Each entry: where the build stands, what comes next.
 
 ---
 
+## 2026-08-25 — M4 feature 1 done: SubtractiveSynth — FIRST SOUND path
+
+The full audible loop exists (pending compile): PLAY -> MidiScheduler runs
+-> finalizeBlock (global sort, one contiguous per-track run via the new
+core/MidiTrackRun handoff) -> PlaybackGraph feeds each lane's run as
+ctx.midiIn -> chain -> SubtractiveSynth -> strip -> sends -> master -> Main
+-> Oboe. With only type 0 registered, the default project's BASS line is
+the premiere (its SUBTRACTIVE_SYNTH); the lead's WavetableSynth is next.
+
+- device/InstrumentNode.h: DeviceNode + VoiceInterface + compiler hooks
+  (voiceGroup registration, type-erased ledger admission); registry
+  isInstrument flag = RTTI-free static_cast.
+- device/instruments/SubtractiveSynth.h: researched classic voice - 2
+  polyBLEP osc (detune/semi/mix, phase-offset), noise, Simper SVF LP with
+  env-amount(oct)/keyTrack/LFO, analog amp+filter ADSRs, velocity to amp +
+  filter depth. Voices heap-free + trivially copyable; control-rate (16)
+  filter/LFO/pitch with their DSP objects PREPARED at the control rate;
+  event-split sample-accurate process; scheduler instance ids key the
+  allocator; live VoiceInterface maps note->id; ledger admission before
+  every allocation; 24 contract descriptors (kSubtractiveParams), quality
+  declared per convention. Migration: shared params migrate; sounding
+  voices reset on structural rebuilds — full voice-state adoption DEFERRED
+  (tracked here; rebuilds are edit-time; cut sustain at swap = accepted M4
+  cost).
+- RegisterBuiltins.cpp (idempotent, engine-ctor) starts the registry.
+- MidiScheduler.finalizeBlock added (per-range segments replaced by global
+  per-track runs); TrackEvents is now an alias of core MidiTrackRun.
+- Map: 173 classes, sweep green.
+
+**Next: M4 continues** — MetronomeNode (cue|main routable click), then
+WavetableSynth + FmSynth, then minimal SessionPlayer/launch.
+
 ## 2026-08-25 — M3 COMPLETE (feature 3: racks/macros/mod core + BlockSet)
 
 - `device/QualityMode.h`: Eco/Standard/High + the "quality" key convention -
