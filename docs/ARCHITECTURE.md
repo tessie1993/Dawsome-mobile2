@@ -405,11 +405,12 @@ classDiagram
         +primed() bool
     }
     class OboeDriver {
-        <<output-driven full duplex per D2: output stream w/ callback (LowLatency, Exclusive->Shared, native rate), callback-less input matched+2x capacity, non-blocking drain, sub-chunks bursts to kMaxBlock, latency reports, reopen flag on route change>>
+        <<output-driven full duplex per D2: output stream w/ callback (LowLatency, Exclusive->Shared, native rate), callback-less input matched+2x capacity + STEREO-VALIDATED (non-stereo capture rejected, session stays output-only), non-blocking drain, sub-chunks bursts to kMaxBlock, reopen flag on route change. Teardown closes the OUTPUT first (its close joins the callback, quiescing drainInput before the input dies - Oboe FullDuplex order); latency/xruns sampled by refreshTelemetry() on the NON-RT readback poll, never inside onAudioReady (framework-lock priority inversion)>>
         +open(sink: RenderSink, cfg: Config) bool
         +start() bool
         +stop()
         +close()
+        +refreshTelemetry()
         +sampleRate() double
         +outputLatencyMs() double
         +inputLatencyMs() double
@@ -853,7 +854,7 @@ classDiagram
         <<POD settings/migrating state body: fileId (bookkeeping mirror of the model - the HANDLE never rides POD migration), root/tune/fine, start + loop mode/points (normalized 0..1), filter cutoff/res/envOct/keytrack, amp+filter ADSR, velocity depths, quality>>
     }
     class SamplerVoice {
-        <<pitched STEREO sample voice: linear-interp read of a builder-distributed const SampleBuffer* (cache conforms to device rate per D5, so ratio = 2^((note-root+tune)/12) is purely musical); per-channel SVF lowpass pair (stateful filters never shared across channels) + amp ADSR; forward loop with sane-clamped window (degenerate < 32 frames disables); control-rate 16 filter; standard VoiceT steal contract>>
+        <<pitched STEREO sample voice: linear-interp read of a builder-distributed const SampleBuffer* (cache conforms to device rate per D5, so ratio = 2^((note-root+tune)/12) is purely musical); per-channel SVF lowpass pair (stateful filters never shared across channels) + amp ADSR; forward loop with window clamped to the READABLE range [0, frames-1] (the interpolator taps i0+1 - review-hardened against the loop-end overread; degenerate < 32 frames disables) and SEAM-AWARE interpolation (the tap after loopEnd is the sample at loopStart - no per-pass click); control-rate 16 filter; standard VoiceT steal contract>>
         +prepare / setBuffer(b) / start / renderAdd
         +active() / releasing() / level() / inTransientWindow()
         +beginRelease() / fastRelease() / kill()

@@ -240,7 +240,7 @@ public:
     }
 
     void setParamImmediate(int denseIndex, float plain) override {
-        float* fields[kParamCount] = {
+        float* fields[] = {
             &shared_.algorithm, &shared_.feedback,
             &shared_.ratio[0], &shared_.level[0], &shared_.attackMs[0],
             &shared_.decayMs[0], &shared_.sustain[0], &shared_.releaseMs[0],
@@ -253,6 +253,7 @@ public:
             &shared_.lfoRateHz, &shared_.lfoToPitchSemi,
             &shared_.velToAmp, &shared_.velToMod, &shared_.quality,
         };
+        static_assert(sizeof(fields) / sizeof(fields[0]) == size_t(kParamCount));
         if (denseIndex >= 0 && denseIndex < kParamCount)
             *fields[denseIndex] = plain;
     }

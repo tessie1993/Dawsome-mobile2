@@ -6,6 +6,51 @@ Newest entry first. Each entry: where the build stands, what comes next.
 
 ---
 
+## 2026-08-25 — Review gate cycle 1: FAIL -> all findings fixed (resubmitted)
+
+First run of the new HARD review rule (AAA DSP+Android reviewer agent,
+read-only). Verdict FAIL: 2 blockers + 2 majors + 8 minors/nits. The two
+blockers (nonexistent oboe:1.5.1; missing -DANDROID_STL=c++_shared for the
+prefab AAR) had already been found+fixed independently through the CI
+red loop - reviewer and CI cross-validate. Everything else fixed:
+
+- [MAJOR] SimpleSampler loop-window HEAP OVERREAD: loopEnd could sit at
+  the raw frame count while the interpolator taps i0+1; wrap math could
+  legally park pos_ in [frames-1, frames). Fixed: loop window clamped to
+  the READABLE range [0, frames-1], start position too; loop-control
+  restructured (wrap first, then one-shot end); verified in-bounds on all
+  paths. Lesson: interpolators define the readable range, not the buffer.
+- [MAJOR] OboeDriver teardown race: input stream was closed/reset while
+  the output callback (drainInput) could still run. Fixed: output closes
+  FIRST (close joins the callback), then input - Oboe FullDuplex order.
+  Lesson: teardown order must quiesce the consumer before the resource.
+- [MINOR] Input channel count now validated (non-stereo capture rejected,
+  output-only session) - the ring's stereo stride assumption is enforced.
+- [MINOR] Loop-seam interpolation is wrap-aware (tap after loopEnd =
+  sample at loopStart) - kills the per-pass click on short sustain loops.
+- [MINOR] Host shim made value/signature-faithful to real Oboe 1.5:
+  ErrorDisconnected=-899 / ErrorInternal=-896, no default ResultWithValue
+  ctor + implicit Result ctor, const-ness mirrored (getFramesPerBurst
+  non-const, getXRunCount const), ChannelCount as UNSCOPED enum with only
+  setChannelCount(int32_t) - as on Android.
+- [MINOR] Latency/xrun sampling moved OUT of onAudioReady (framework-lock
+  priority-inversion risk) into OboeDriver::refreshTelemetry(), called
+  from the non-RT readback poll (nativePollStatus).
+- [MINOR] fields-table static_asserts added to ALL four PolyInstrument
+  synths (deduced-bound array + assert vs kParamCount).
+- [MINOR] third_party/dr_libs/VENDOR.md provenance manifest (upstream,
+  date, embedded versions, no-modifications statement, update procedure).
+- [MINOR] -Wall -Wextra on the ANDROID target too (the #ifdef __ANDROID__
+  code was warning-checked nowhere).
+- [NIT] AudioEngine ctor comment now states the real safety invariant;
+  registerType results counted (builtinRegistrationFailures());
+  quality/smoothing TODOs annotated to their milestones.
+
+Host check green after fixes. Resubmitted to the SAME reviewer for the
+pass verdict; committing this round so CI validates in parallel.
+
+---
+
 ## 2026-08-25 — AUDIO CORE BRING-UP: the engine is wired, compiled, and ships in the APK
 
 User pivot after installing a silent debug APK: the no-compile phase is

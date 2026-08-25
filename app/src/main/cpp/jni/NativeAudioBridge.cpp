@@ -202,7 +202,8 @@ jboolean nativePollStatus(JNIEnv* env, jobject, jlong handle, jobject buffer) {
 
     const TransportClockData clk = b->engine.clock();
     const TimeAnchor anchor = b->engine.anchor();
-    const OboeDriver& drv = b->engine.driver();
+    OboeDriver& drv = b->engine.driver();
+    drv.refreshTelemetry();   // latency/xruns sampled off-callback (non-RT here)
 
     EngineStatusWire w{};
     w.version = kWireVersion;

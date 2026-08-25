@@ -48,8 +48,10 @@ struct SamplerShared {                 // POD; migrating state body
     float filtAttackMs = 2.0f, filtDecayMs = 300.0f, filtSustain = 1.0f, filtReleaseMs = 250.0f;
     float velToAmp = 0.7f;
     float velToFilter = 0.2f;
-    float quality = 1.0f;
+    float quality = 1.0f;   // TODO(QualityMode milestone): drive interp/filter tier
 };
+// TODO(automation milestone): filter.cutoff/resonance smoothingMs stays 0 until
+// the resolver-side smoothing engine lands (platform-wide instrument deferral).
 
 class SamplerVoice {
 public:
@@ -76,11 +78,18 @@ public:
         filtVel_ = 1.0f - p.velToFilter * (1.0f - velocity01);
 
         const double frames = buf_ != nullptr ? double(buf_->frames) : 0.0;
+        const double lastReadable = frames > 1.0 ? frames - 1.0 : 0.0;
         pos_ = dsp::clamp01(p.startNorm) * frames;
-        // Loop points clamped to a sane, ordered window at note start; a
-        // degenerate window (< 32 frames) disables looping for this note.
+        if (pos_ > lastReadable) pos_ = lastReadable;
+        // Loop points clamped to the READABLE window [0, frames-1] at note
+        // start - the interpolator taps i0+1, so a loop end at the raw frame
+        // count would read one past the buffer (heap overread on the last
+        // planar channel; review finding). A degenerate window (< 32 frames)
+        // disables looping for this note.
         loopStart_ = dsp::clamp01(p.loopStartNorm) * frames;
         loopEnd_ = dsp::clamp01(p.loopEndNorm) * frames;
+        if (loopEnd_ > lastReadable) loopEnd_ = lastReadable;
+        if (loopStart_ > lastReadable) loopStart_ = lastReadable;
         looping_ = p.loopMode >= 0.5f && (loopEnd_ - loopStart_) >= 32.0;
         const double semis = double(pitch) - double(p.rootNote) +
                              double(p.tuneSemi) + double(p.tuneCents) * 0.01;
@@ -131,24 +140,23 @@ public:
             filterR_.setParams(cutoff, q);
 
             for (int s = 0; s < m; ++s) {
-                if (pos_ >= lastFrame) {
-                    if (looping_) {
-                        pos_ = loopStart_ + (pos_ - loopEnd_);
-                        if (pos_ < loopStart_ || pos_ >= loopEnd_) pos_ = loopStart_;
-                    } else {
-                        active_ = false;
-                        break;
-                    }
-                }
                 if (looping_ && pos_ >= loopEnd_) {
                     pos_ = loopStart_ + (pos_ - loopEnd_);
                     if (pos_ < loopStart_ || pos_ >= loopEnd_) pos_ = loopStart_;
+                } else if (pos_ >= lastFrame) {
+                    active_ = false;                     // one-shot ran off the end
+                    break;
                 }
                 const int64_t i0 = static_cast<int64_t>(pos_);
                 const float fr = static_cast<float>(pos_ - double(i0));
+                // Seam-aware taps: inside the loop the sample after loopEnd_
+                // is musically the one AT loopStart_ - interpolating across
+                // the seam kills the per-pass click on short sustain loops.
+                const bool seam = looping_ && double(i0 + 1) >= loopEnd_;
+                const int64_t i1 = seam ? static_cast<int64_t>(loopStart_) : i0 + 1;
                 const float a = ampEnv_.process() * ampVel_;
-                const float sl = chL[i0] + (chL[i0 + 1] - chL[i0]) * fr;
-                const float sr = chR[i0] + (chR[i0 + 1] - chR[i0]) * fr;
+                const float sl = chL[i0] + (chL[i1] - chL[i0]) * fr;
+                const float sr = chR[i0] + (chR[i1] - chR[i0]) * fr;
                 l[i + s] += filterL_.process(sl) * a;
                 r[i + s] += filterR_.process(sr) * a;
                 pos_ += ratio_;
@@ -227,7 +235,9 @@ public:
     }
 
     void setParamImmediate(int denseIndex, float plain) override {
-        float* fields[kParamCount] = {
+        // Deduced bound + static_assert: a descriptor appended without a
+        // matching field entry fails the build instead of writing nullptr.
+        float* fields[] = {
             &shared_.rootNote, &shared_.tuneSemi, &shared_.tuneCents,
             &shared_.startNorm,
             &shared_.loopMode, &shared_.loopStartNorm, &shared_.loopEndNorm,
@@ -239,6 +249,7 @@ public:
             &shared_.filtReleaseMs,
             &shared_.velToAmp, &shared_.velToFilter, &shared_.quality,
         };
+        static_assert(sizeof(fields) / sizeof(fields[0]) == size_t(kParamCount));
         if (denseIndex >= 0 && denseIndex < kParamCount)
             *fields[denseIndex] = plain;
     }

@@ -30,6 +30,9 @@ set(DAWCORE_SOURCES
 if(ANDROID)
     add_library(dawcore SHARED ${DAWCORE_SOURCES})
     target_include_directories(dawcore PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+    # Same zero-warnings bar as the host check - the Android-only code
+    # (#ifdef __ANDROID__ paths) is warning-checked nowhere else.
+    target_compile_options(dawcore PRIVATE -Wall -Wextra)
 
     find_package(oboe REQUIRED CONFIG)
     target_link_libraries(dawcore
