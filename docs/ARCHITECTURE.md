@@ -391,8 +391,58 @@ classDiagram
 
     %% Native DSP primitives & support types (header-only helpers used
     %% inside the nodes above; listed for completeness of the map)
+    %% ---- M0 dsp/ (NEW ENGINE - pure DSP primitives, host-compilable) ----
     class Oscillator {
-        <<band-limited osc core>>
+        <<polyBLEP band-limited: sine, saw, pulse (PWM), triangle; hard sync>>
+        +prepare(sampleRate)
+        +setWave(w: Wave)
+        +setFrequency(hz: float)
+        +setPulseWidth(pw: float)
+        +sync(phase)
+        +process() float
+    }
+    class NoiseGen {
+        <<white + Kellet pink (-3 dB/oct)>>
+        +white() float
+        +pink() float
+        +reseed(seed)
+    }
+    class SvfFilter {
+        <<Simper trapezoidal ZDF SVF - audio-rate-mod safe; LP/BP/HP/notch/peak/AP>>
+        +prepare(sampleRate)
+        +setMode(m: Mode)
+        +setParams(cutoffHz, q)
+        +process(in: float) float
+    }
+    class BiquadFilter {
+        <<TDF-II + RBJ cookbook designs - static EQ bands, shelves, crossovers>>
+        +prepare(sampleRate)
+        +design(type, freqHz, q, gainDb)
+        +process(in: float) float
+    }
+    class AdsrEnvelope {
+        <<analog-style one-pole segments with overshoot targets>>
+        +prepare(sampleRate)
+        +setTimes(attackMs, decayMs, sustain, releaseMs)
+        +noteOn()
+        +noteOff()
+        +process() float
+        +isActive() bool
+    }
+    class Lfo {
+        <<sine/tri/saws/square/S&H/smooth-random, seedable for render parity>>
+        +prepare(sampleRate)
+        +setShape(s: Shape)
+        +setFrequency(hz)
+        +process() float
+    }
+    class DelayLine {
+        <<power-of-2 mono history; integer, linear and cubic-Hermite reads>>
+        +prepare(maxDelaySamples)
+        +write(in: float)
+        +read(delay: int) float
+        +readLinear(delay: float) float
+        +readHermite(delay: float) float
     }
     class MoogLadderFilter {
         <<4-pole ladder LPF>>
