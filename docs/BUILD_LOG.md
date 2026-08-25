@@ -6,6 +6,41 @@ Newest entry first. Each entry: where the build stands, what comes next.
 
 ---
 
+## 2026-08-25 — M1 COMPLETE (feature 4: editSeq + structure-delta sync)
+
+The dual-model loop is closed end to end: edit -> editSeq-stamped bundle ->
+GraphBuilder -> TimelineSnapshot -> RT claim -> MidiScheduler reconciliation.
+
+- ProjectStore: monotonic editSeq on every published change; onEngineSync is
+  now `(ProjectAction?, ProjectState, Int)` - undo/redo notify with a NULL
+  action (state authoritative, engine resyncs wholesale). Closed the M0 gap
+  where undo silently diverged the engine.
+- DeltaEncoder: ModelDelta bundles bit-identical to DeltaSchemas.h
+  (envelope + contract-ordered 16B StateCodec headers, empty payload =
+  remove).
+- EngineController: native session (and its builder thread) created EAGERLY
+  at construction - deltas apply while audio is closed; sendModelDelta
+  (idempotent, never backpressured, growable direct buffer).
+- EngineSync: full three-class classification stamped with real editSeq.
+  Structure edits map per action (clip placement-only vs content-only
+  updates); cascading removes derive from PRE-state; shared content removed
+  only when unreferenced post-state; canonical linked-pair content id =
+  lexicographic MIN of clip ids (forward-compatible with explicit
+  ClipContent + copy-on-unlink at the session milestone); drum steps
+  flatten via DrumPadType.midiPitch with stable fnv32 step ids; solo/arm/
+  mute reach the model's track flags (audibility matrix input, M2); SetBpm
+  sends the live splice AND the canonical tempo delta; NULL action + every
+  RUNNING transition trigger full push + param resend.
+- Model v2 note: the deep entity split (explicit ClipContent, TakeLane,
+  automation entities) lands with the milestones that consume it; M1's
+  slice is identity + editSeq + linked-content derivation, keeping the UI
+  layer stable. Map: 137 classes, sweep green.
+
+**Next (M2, blueprint §11):** PlaybackGraph compile + swap (GraphBuilder
+kDirtyGraph consumer), TrackStrip/MasterNode with the contract param keys,
+key->dense resolver, PDC skeleton, MigrationPlan adopt path, meter probes -
+the first audible milestone.
+
 ## 2026-08-25 — M1 feature 3 done: MidiScheduler
 
 `sequencer/MidiEvent.h` (the seam-1 MidiEventSpan types; OFF sorts before ON

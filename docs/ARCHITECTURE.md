@@ -759,11 +759,13 @@ classDiagram
     %% 4. UNIDIRECTIONAL DATA FLOW (UDF) STORE & ACTIONS
     %% ==========================================
     class ProjectStore {
+        <<UDF store; every published change carries a monotonic editSeq (blueprint 2.2 ordering); undo/redo notify the sync listener with a NULL action = state is authoritative, engine resyncs wholesale>>
         -MutableStateFlow~ProjectState~ _state
         +StateFlow~ProjectState~ state
         -ArrayDeque~ProjectState~ undoStack
         -ArrayDeque~ProjectState~ redoStack
-        +((ProjectAction, ProjectState)->Unit)? onEngineSync
+        +Int editSeq
+        +((ProjectAction?, ProjectState, Int)->Unit)? onEngineSync
         +dispatch(action: ProjectAction)
         +undo()
         +redo()
@@ -1153,13 +1155,25 @@ classDiagram
         +flush(handle: Long) FlushResult
     }
     class EngineController {
-        <<native lifecycle owner; ALL native calls run on its single daw-engine-io dispatcher = the JNI SPSC producer thread; states UNAVAILABLE/IDLE/RUNNING/FAILED; send{} = enqueue+flush with 5ms backpressure retry; param overflow -> onReconcileNeeded; D5 route loss -> requestReopen (stop+start)>>
+        <<native lifecycle owner; ALL native calls run on its single daw-engine-io dispatcher = the JNI SPSC producer thread; the native session (and its GraphBuilder thread) is created EAGERLY at construction so model deltas apply while audio is closed; states UNAVAILABLE/IDLE/RUNNING/FAILED; send{} = enqueue+flush with 5ms backpressure retry; sendModelDelta wraps DeltaEncoder bundles in ModelDelta frames (idempotent, never backpressured, growable direct buffer); param overflow -> onReconcileNeeded; D5 route loss -> requestReopen (stop+start)>>
         +StateFlow~EngineState~ state
         +start(enginePrefs: EnginePrefs)
         +stop()
         +release()
         +requestReopen()
         +send(block: CommandEncoder lambda)
+        +sendModelDelta(bundle: ByteArray)
+    }
+    class DeltaEncoder {
+        <<builds one ModelDelta bundle: 8-byte envelope (editSeq) + StateCodec entity frames, bit-identical to DeltaSchemas.h (contract-ordered 16B headers, unaligned u64 at offset 4; empty payload = remove); one edit action = one bundle>>
+        +upsertTrack(uid, type, flags, order, volumeDb, pan, sendA, sendB)
+        +upsertClip(uid, trackUid, contentUid, startBeat, lengthBeats, slotIndex, looping)
+        +upsertContent(uid, lengthBeats, notes: List~WireNote~)
+        +upsertDevice(uid, trackUid, type, enabled, order)
+        +upsertScene(uid, index)
+        +tempoMap(events, sigNumerator, sigDenominator)
+        +remove(entityKind, uid)
+        +build() ByteArray
     }
     class EngineStatus {
         <<data class; decoded EngineStatusWire snapshot + polledAtNanos>>
@@ -1177,12 +1191,15 @@ classDiagram
         +estimatedSamplePos(nowNanos: Long) Long
     }
     class EngineSync {
-        <<the change-classification seam (dual-model): M0 classes = transport intents + param moves addressed (makeNodeUid, paramKey); structure-shaped edits become StateCodec ModelDeltas from M1; reads POST-reduction ProjectState; reconcile = resendAuthoritativeParams (also at attach, queued until engine start = pre-graph table warm-up)>>
+        <<the change-classification seam (dual-model), complete for M1: transport intents -> messages, param moves -> Param/Move, structure edits -> ModelDelta bundles - all stamped with the store's real editSeq. Cascading removes derive from the PRE-change state; shared ClipContent removed only when unreferenced in post-state; canonical content id of a linked arr/session pair = lexicographic MIN of the clip ids (forward-compatible with explicit ClipContent + copy-on-unlink at the session milestone). Drum steps flatten to NoteRecords via DrumPadType.midiPitch with stable fnv32 step ids. NULL store action (undo/redo) and every RUNNING transition -> full model push + param resend (idempotent wholesale resync)>>
         +attach()
         +detach()
+        +pushFullModel(state, editSeq)
         +resendAuthoritativeParams()
     }
 
+    EngineSync ..> DeltaEncoder
+    DeltaEncoder ..> WireProtocol
     EngineController *-- CommandEncoder
     EngineController ..> NativeAudioBridge
     EngineController ..> EnginePrefs

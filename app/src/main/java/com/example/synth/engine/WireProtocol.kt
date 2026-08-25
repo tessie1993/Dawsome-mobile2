@@ -152,6 +152,12 @@ object WireProtocol {
     const val NODE_KIND_TRACK = "track"
     const val NODE_KIND_DEVICE = "device"
     const val NODE_KIND_MASTER = "master"
+    const val NODE_KIND_CLIP = "clip"
+    const val NODE_KIND_CONTENT = "content"
+    const val NODE_KIND_SCENE = "scene"
+
+    /** General FNV-1a-32 (same function paramKey applies to semantic keys). */
+    fun fnv1a32(s: String): Int = paramKey(s)
 
     /** The master strip's node uid (single well-known instance). */
     val masterNodeUid: Long = makeNodeUid(NODE_KIND_MASTER, "master")

@@ -1,5 +1,7 @@
 package com.example.synth.engine
 
+import java.nio.ByteBuffer
+import java.nio.ByteOrder
 import java.util.concurrent.Executors
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
@@ -65,6 +67,15 @@ class EngineController {
     private var handle = 0L
     private var prefs = EnginePrefs()
     private var retryScheduled = false
+    private var deltaBuffer: ByteBuffer? = null
+
+    init {
+        // Create the native session eagerly: the GraphBuilder thread spawns
+        // with it, so model deltas apply while audio streams are still
+        // closed. The single-thread executor guarantees this runs before any
+        // posted send/sendModelDelta.
+        if (NativeAudioBridge.isLoaded) scope.launch { ensureHandle() }
+    }
 
     // ---- lifecycle (callable from any thread; work posts to engine-io) -----
 
@@ -72,11 +83,7 @@ class EngineController {
         if (!NativeAudioBridge.isLoaded) return
         scope.launch {
             prefs = enginePrefs
-            if (handle == 0L) handle = NativeAudioBridge.nativeCreate()
-            if (handle == 0L) {
-                _state.value = EngineState.FAILED
-                return@launch
-            }
+            if (ensureHandle() == 0L) return@launch
             val ok = NativeAudioBridge.nativeStart(
                 handle, prefs.enableInput, prefs.bufferBursts)
             _state.value = if (ok) EngineState.RUNNING else EngineState.FAILED
@@ -133,11 +140,48 @@ class EngineController {
         }
     }
 
+    /**
+     * Push one ModelDelta bundle ([DeltaEncoder.build]) to the GraphBuilder.
+     * Deltas apply whether or not audio is running (the builder thread lives
+     * with the native session); they are idempotent and never backpressured.
+     */
+    fun sendModelDelta(bundle: ByteArray) {
+        if (!NativeAudioBridge.isLoaded || bundle.isEmpty()) return
+        scope.launch {
+            if (ensureHandle() == 0L) return@launch
+            val byteLen = WireProtocol.FRAME_HEADER_BYTES + bundle.size
+            val buf = deltaBufferFor(byteLen)
+            buf.clear()
+            buf.putShort(WireProtocol.WIRE_VERSION.toShort())
+                .putShort(WireProtocol.KIND_MODEL_DELTA.toShort())
+                .putInt(bundle.size)
+                .put(bundle)
+            NativeAudioBridge.nativePushCommands(handle, buf, byteLen)
+        }
+    }
+
     // ---- engine-io internals -----------------------------------------------
 
     /** Readback's per-tick handle gate; engine-io thread only. */
     internal fun handleForReadback(): Long =
         if (_state.value == EngineState.RUNNING) handle else 0L
+
+    private fun ensureHandle(): Long {
+        if (handle == 0L) {
+            handle = NativeAudioBridge.nativeCreate()
+            if (handle == 0L) _state.value = EngineState.FAILED
+        }
+        return handle
+    }
+
+    private fun deltaBufferFor(bytes: Int): ByteBuffer {
+        val cur = deltaBuffer
+        if (cur != null && cur.capacity() >= bytes) return cur
+        val grown = ByteBuffer.allocateDirect(maxOf(bytes, 16 * 1024))
+            .order(ByteOrder.LITTLE_ENDIAN)
+        deltaBuffer = grown
+        return grown
+    }
 
     private fun flushNow() {
         if (handle == 0L || _state.value != EngineState.RUNNING) return
