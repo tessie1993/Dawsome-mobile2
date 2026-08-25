@@ -21,6 +21,7 @@ enum class MsgFamily : uint8_t {
     Note      = 2,
     Structure = 3,
     System    = 4,
+    Session   = 5,   // appended v1.1 (append-only vocabulary, layout unchanged)
 };
 
 enum class TransportOp : uint8_t {
@@ -61,6 +62,14 @@ enum class StructureOp : uint8_t {
 enum class SystemOp : uint8_t {
     Panic = 0,         // ring overflow / stuck-note guard: all notes off everywhere
     RequestMeterFlush, // debugging aid
+};
+
+enum class SessionOp : uint8_t {
+    LaunchClip = 0,    // nodeUid = trackUid, b = clipUid, a = slotIndex (informational)
+    StopSlot,          // nodeUid = trackUid: quantized stop; track STAYS session-owned
+    ReturnTrack,       // nodeUid = trackUid: immediate back-to-arrangement
+    ReturnAll,         // every track back to arrangement
+    SetLaunchQuantum,  // a = mode (0 none, 1 bar, 2 fixed), v0 = beats for fixed
 };
 
 struct EngineMessage {

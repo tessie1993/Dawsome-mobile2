@@ -70,6 +70,9 @@ public:
     double outputLatencyMs() const noexcept { return outputLatencyMs_.load(std::memory_order_relaxed); }
     double inputLatencyMs() const noexcept { return inputLatencyMs_.load(std::memory_order_relaxed); }
     int32_t xrunCount() const noexcept { return xruns_.load(std::memory_order_relaxed); }
+    // Duplex input stream is open (output-only sessions report false). Atomic
+    // because the readback poll thread asks while open/close runs elsewhere.
+    bool inputOpen() const noexcept { return inputOpen_.load(std::memory_order_acquire); }
 
     // Set when a stream died (route change, device gone). EngineController
     // polls this and runs the D5 re-prepare sequence off-thread.
@@ -104,6 +107,7 @@ private:
     std::atomic<double>  inputLatencyMs_{0.0};
     std::atomic<int32_t> xruns_{0};
     std::atomic<bool>    needsReopen_{false};
+    std::atomic<bool>    inputOpen_{false};
     int latencyRefreshCountdown_ = 0;
 };
 

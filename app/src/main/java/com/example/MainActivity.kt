@@ -12,11 +12,12 @@ import com.example.ui.theme.earth.EarthTheme
 class MainActivity : ComponentActivity() {
   override fun onCreate(savedInstanceState: Bundle?) {
     super.onCreate(savedInstanceState)
+    DawRuntime.ensureStarted()
     enableEdgeToEdge()
     setContent {
       EarthTheme {
         Surface(color = EarthColorTokens.BgObsidianDeep) {
-          MainDawScreen()
+          MainDawScreen(store = DawRuntime.store, readback = DawRuntime.readback)
         }
       }
     }

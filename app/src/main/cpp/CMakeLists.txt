@@ -23,13 +23,23 @@ target_include_directories(dawcore_core INTERFACE ${CMAKE_CURRENT_SOURCE_DIR})
 
 if(ANDROID)
     add_library(dawcore SHARED
-        engine/OboeDriver.cpp
+        device/RegisterBuiltins.cpp
         engine/AudioEngine.cpp
-        # jni/ translation units land here next (M0 feature 4).
+        engine/EngineModel.cpp
+        engine/OboeDriver.cpp
+        graph/GraphBuilder.cpp
+        graph/PlaybackGraph.cpp
+        jni/NativeAudioBridge.cpp
+        media/AudioFileDecoder.cpp
+        media/SampleCache.cpp
         )
     target_link_libraries(dawcore PRIVATE dawcore_core)
     # Oboe arrives via prefab dependency when Gradle wiring is enabled:
     # find_package(oboe REQUIRED CONFIG); target_link_libraries(dawcore PRIVATE oboe::oboe log)
+    # Media prerequisites at the same milestone:
+    #   - vendor dr_wav.h/dr_flac.h/dr_mp3.h under third_party/dr_libs/
+    #     (PD/MIT-0; AudioFileDecoder.cpp is their single implementation TU)
+    #   - target_link_libraries(dawcore PRIVATE mediandk)  # NDK AAC decode
 else()
     add_library(dawcore_host INTERFACE)
     target_link_libraries(dawcore_host INTERFACE dawcore_core)

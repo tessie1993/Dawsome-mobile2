@@ -1,5 +1,6 @@
 package com.example.synth.domain
 
+import java.util.concurrent.atomic.AtomicInteger
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -12,6 +13,12 @@ import kotlinx.coroutines.launch
 /**
  * Centralized Unidirectional Data Flow Store for DAW Project State.
  * Handles thread-safe state reduction, undo/redo history, and engine notifications.
+ *
+ * Every state change carries a monotonic [editSeq] (blueprint 2.2 ordering
+ * rule): the engine sync layer stamps messages and model-delta bundles with
+ * it, and compiled engine artifacts record the editSeq they were built from.
+ * Undo/redo notify the sync listener with a null action - the state is
+ * authoritative and the engine resyncs wholesale.
  */
 class ProjectStore(
     initialState: ProjectState = createDefaultProject(),
@@ -23,8 +30,13 @@ class ProjectStore(
     private val undoStack = ArrayDeque<ProjectState>()
     private val redoStack = ArrayDeque<ProjectState>()
 
-    // Optional listener for audio engine synchronization
-    var onEngineSync: ((ProjectAction, ProjectState) -> Unit)? = null
+    private val editSeqCounter = AtomicInteger(0)
+
+    /** The sequence number of the latest published state change. */
+    val editSeq: Int get() = editSeqCounter.get()
+
+    /** Engine synchronization listener. Null action = undo/redo/full resync. */
+    var onEngineSync: ((ProjectAction?, ProjectState, Int) -> Unit)? = null
 
     fun dispatch(action: ProjectAction) {
         scope.launch {
@@ -38,7 +50,7 @@ class ProjectStore(
             }
 
             _state.value = nextState
-            onEngineSync?.invoke(action, nextState)
+            onEngineSync?.invoke(action, nextState, editSeqCounter.incrementAndGet())
         }
     }
 
@@ -47,6 +59,7 @@ class ProjectStore(
             val prev = undoStack.removeLast()
             redoStack.addLast(_state.value)
             _state.value = prev
+            onEngineSync?.invoke(null, prev, editSeqCounter.incrementAndGet())
         }
     }
 
@@ -55,6 +68,7 @@ class ProjectStore(
             val next = redoStack.removeLast()
             undoStack.addLast(_state.value)
             _state.value = next
+            onEngineSync?.invoke(null, next, editSeqCounter.incrementAndGet())
         }
     }
 
