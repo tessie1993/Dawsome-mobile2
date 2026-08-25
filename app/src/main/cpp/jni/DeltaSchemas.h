@@ -88,10 +88,15 @@ struct NoteRecord {
 };
 static_assert(sizeof(NoteRecord) == 24);
 
-// ---- Device (kind = Device, 16 bytes) --------------------------------------
+// ---- Device (kind = Device, 16-byte head + params) -------------------------
+// Length-driven extension (backward-readable, no version bump): the head may
+// be followed by N ParamValueRecords, N = (byteLen - 16) / 8. These are the
+// device's current plain param values by semantic key hash - the model
+// residency that lets rebuilt graphs bake params in (a table-only value can
+// be reclaimed as "baked" without ever reaching the model).
 struct DeviceDeltaPayload {
     uint64_t trackUid;
-    uint8_t  deviceType;     // engine device-type registry (M3+); opaque until then
+    uint8_t  deviceType;     // DeviceTypeId (frozen wire numbering)
     uint8_t  flags;          // bit0 enabled
     uint16_t order;          // chain position
     uint32_t pad0;           // keeps sizeof == 16 under 8-byte struct alignment
@@ -99,6 +104,12 @@ struct DeviceDeltaPayload {
 static_assert(sizeof(DeviceDeltaPayload) == 16);
 
 inline constexpr uint8_t kDeviceFlagEnabled = 1u << 0;
+
+struct ParamValueRecord {
+    uint32_t keyHash;        // FNV-1a-32 of the semantic key
+    float    plain;
+};
+static_assert(sizeof(ParamValueRecord) == 8);
 
 // ---- Scene (kind = Scene, 8 bytes) -----------------------------------------
 struct SceneDeltaPayload {

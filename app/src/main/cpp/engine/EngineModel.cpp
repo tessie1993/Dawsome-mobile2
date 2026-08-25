@@ -100,12 +100,36 @@ bool EngineModel::applyDevice(NodeUid id, const uint8_t* p, uint32_t len) {
     }
     DeviceDeltaPayload w;
     if (!readRecord(p, len, 0, w)) return false;
+    const size_t tail = len - sizeof(w);
+    if (tail % sizeof(ParamValueRecord) != 0) return false;
+    const size_t paramCount = tail / sizeof(ParamValueRecord);
+
+    // Param-only refreshes (knob moves keeping their model residency) must
+    // NOT rebuild the graph - live values ride the param path; the model
+    // copy is baked at the next structural rebuild. Only structural facts
+    // mark graph-dirty.
+    const auto it = devices_.find(id);
+    const bool structural =
+        it == devices_.end() ||
+        it->second.trackUid != w.trackUid ||
+        it->second.type != w.deviceType ||
+        it->second.enabled != ((w.flags & kDeviceFlagEnabled) != 0) ||
+        it->second.order != w.order;
+
     ModelDevice& dev = devices_[id];
     dev.trackUid = w.trackUid;
     dev.type = w.deviceType;
     dev.enabled = (w.flags & kDeviceFlagEnabled) != 0;
     dev.order = w.order;
-    dirty_ |= kDirtyGraph;
+    dev.params.clear();
+    dev.params.reserve(paramCount);
+    size_t off = sizeof(w);
+    for (size_t i = 0; i < paramCount; ++i, off += sizeof(ParamValueRecord)) {
+        ParamValueRecord r;
+        if (!readRecord(p, len, off, r)) return false;
+        dev.params.emplace_back(r.keyHash, r.plain);
+    }
+    if (structural) dirty_ |= kDirtyGraph;
     return true;
 }
 

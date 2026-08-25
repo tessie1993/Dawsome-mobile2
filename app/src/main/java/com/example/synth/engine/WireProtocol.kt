@@ -174,4 +174,5 @@ object ParamKeys {
     const val MIXER_SEND_A = "mixer.sendA"    // 0..1
     const val MIXER_SEND_B = "mixer.sendB"    // 0..1
     const val MIXER_MUTE = "mixer.mute"       // 0/1 switch
+    const val DEVICE_BYPASS = "device.bypass" // 0 active / 1 bypassed (chain-owned)
 }

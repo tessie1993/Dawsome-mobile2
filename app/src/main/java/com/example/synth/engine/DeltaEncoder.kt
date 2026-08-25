@@ -65,10 +65,20 @@ class DeltaEncoder(private val editSeq: Int) {
         frame(WireProtocol.ENTITY_CLIP_CONTENT, uid, p)
     }
 
-    fun upsertDevice(uid: Long, trackUid: Long, type: Int, enabled: Boolean, order: Int) {
-        val p = ByteArray(16)
-        wrap(p).putLong(trackUid).put(type.toByte())
+    /**
+     * Length-driven params tail (DeltaSchemas.h): current plain values by
+     * semantic key hash, so rebuilt graphs bake them in.
+     */
+    fun upsertDevice(
+        uid: Long, trackUid: Long, type: Int, enabled: Boolean, order: Int,
+        params: List<Pair<Int, Float>> = emptyList(),
+    ) {
+        val p = ByteArray(16 + params.size * 8)
+        val b = wrap(p)
+        b.putLong(trackUid).put(type.toByte())
             .put((if (enabled) 1 else 0).toByte()).putShort(order.toShort())
+            .putInt(0)
+        for ((keyHash, plain) in params) b.putInt(keyHash).putFloat(plain)
         frame(WireProtocol.ENTITY_DEVICE, uid, p)
     }
 

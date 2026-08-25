@@ -62,9 +62,11 @@ struct ModelClipContent {
 
 struct ModelDevice {
     NodeUid  trackUid = 0;
-    uint8_t  type = 0;
+    uint8_t  type = 0;                // DeviceTypeId wire numbering
     bool     enabled = true;
     uint16_t order = 0;
+    // Current plain values by semantic key hash - baked into rebuilt graphs.
+    std::vector<std::pair<uint32_t, float>> params;
 };
 
 struct ModelScene {

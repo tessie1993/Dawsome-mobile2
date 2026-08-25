@@ -115,9 +115,14 @@ class EngineSync(
                 state, action.trackId,
                 if (action.sendIndex == 0) ParamKeys.MIXER_SEND_A else ParamKeys.MIXER_SEND_B,
                 editSeq)
-            is ProjectAction.SetDeviceParam -> sendParam(
-                WireProtocol.makeNodeUid(WireProtocol.NODE_KIND_DEVICE, action.deviceId),
-                action.paramName, action.value.toDouble(), editSeq)
+            is ProjectAction.SetDeviceParam -> {
+                sendParam(
+                    WireProtocol.makeNodeUid(WireProtocol.NODE_KIND_DEVICE, action.deviceId),
+                    action.paramName, action.value.toDouble(), editSeq)
+                // Model residency for rebuilds: refresh this one device row.
+                // Param-only device deltas never mark the graph dirty.
+                sendSingleDevice(state, editSeq, action.trackId, action.deviceId)
+            }
             is ProjectAction.SetMasterVolume -> {
                 // Param for the live strip; the type-4 track delta bakes the
                 // value into the model so rebuilt graphs start correct.
@@ -163,7 +168,19 @@ class EngineSync(
                 sendContentOnly(state, editSeq, action.clipId)
             is ProjectAction.AddDevice -> sendDeviceChain(state, editSeq, action.trackId)
             is ProjectAction.RemoveDevice -> sendDeviceChain(state, editSeq, action.trackId)
-            is ProjectAction.ToggleDeviceEnabled -> sendDeviceChain(state, editSeq, action.trackId)
+            is ProjectAction.ToggleDeviceEnabled -> {
+                // Live click-free bypass rides the param path (chain-owned
+                // device.bypass); the delta keeps the model's enabled flag
+                // canonical for rebuilds.
+                val enabled = state.tracks.firstOrNull { it.id == action.trackId }
+                    ?.devices?.firstOrNull { it.id == action.deviceId }?.isEnabled
+                if (enabled != null) {
+                    sendParam(
+                        WireProtocol.makeNodeUid(WireProtocol.NODE_KIND_DEVICE, action.deviceId),
+                        ParamKeys.DEVICE_BYPASS, if (enabled) 0.0 else 1.0, editSeq)
+                }
+                sendDeviceChain(state, editSeq, action.trackId)
+            }
             // Solo/arm are track-structure facts (the M2 audibility matrix and
             // the recording system read them from Track deltas, not params).
             is ProjectAction.ToggleTrackSolo -> sendTrackUpsert(state, editSeq, action.trackId)
@@ -232,7 +249,8 @@ class EngineSync(
             t.volumeDb, t.pan, t.sendLevelA, t.sendLevelB)
         t.devices.forEachIndexed { order, dev ->
             d.upsertDevice(WireProtocol.makeNodeUid(WireProtocol.NODE_KIND_DEVICE, dev.id),
-                trackUid, dev.type.ordinal, dev.isEnabled, order)
+                trackUid, deviceTypeWire(dev.type), dev.isEnabled, order,
+                deviceWireParams(dev))
         }
         for (c in t.arrangementClips) encodeArrangementClip(d, trackUid, c)
         for (c in t.sessionClips) encodeSessionClip(d, trackUid, c)
@@ -358,6 +376,20 @@ class EngineSync(
         if (!d.isEmpty) controller.sendModelDelta(d.build())
     }
 
+    private fun sendSingleDevice(
+        state: ProjectState, editSeq: Int, trackId: String, deviceId: String,
+    ) {
+        val t = state.tracks.firstOrNull { it.id == trackId } ?: return
+        val order = t.devices.indexOfFirst { it.id == deviceId }
+        if (order < 0) return
+        val dev = t.devices[order]
+        val d = DeltaEncoder(editSeq)
+        d.upsertDevice(WireProtocol.makeNodeUid(WireProtocol.NODE_KIND_DEVICE, dev.id),
+            WireProtocol.makeNodeUid(WireProtocol.NODE_KIND_TRACK, trackId),
+            deviceTypeWire(dev.type), dev.isEnabled, order, deviceWireParams(dev))
+        controller.sendModelDelta(d.build())
+    }
+
     private fun sendDeviceChain(state: ProjectState, editSeq: Int, trackId: String) {
         val t = state.tracks.firstOrNull { it.id == trackId } ?: return
         val trackUid = WireProtocol.makeNodeUid(WireProtocol.NODE_KIND_TRACK, trackId)
@@ -372,7 +404,8 @@ class EngineSync(
         // Upsert the whole chain (order is positional).
         t.devices.forEachIndexed { order, dev ->
             d.upsertDevice(WireProtocol.makeNodeUid(WireProtocol.NODE_KIND_DEVICE, dev.id),
-                trackUid, dev.type.ordinal, dev.isEnabled, order)
+                trackUid, deviceTypeWire(dev.type), dev.isEnabled, order,
+                deviceWireParams(dev))
         }
         controller.sendModelDelta(d.build())
     }
@@ -405,6 +438,30 @@ class EngineSync(
         TrackType.RETURN -> 3
         TrackType.MASTER -> 4
     }
+
+    // FROZEN wire numbering - mirrors cpp/device/DeviceRegistry.h
+    // DeviceTypeId. Never derived from enum ordinals.
+    private fun deviceTypeWire(t: com.example.synth.domain.DeviceType): Int = when (t) {
+        com.example.synth.domain.DeviceType.SUBTRACTIVE_SYNTH -> 0
+        com.example.synth.domain.DeviceType.WAVETABLE_SYNTH -> 1
+        com.example.synth.domain.DeviceType.FM_SYNTH -> 2
+        com.example.synth.domain.DeviceType.SAMPLER -> 3
+        com.example.synth.domain.DeviceType.ELECTRIC_PIANO -> 4
+        com.example.synth.domain.DeviceType.STRING_PAD -> 5
+        com.example.synth.domain.DeviceType.DRUM_RACK -> 6
+        com.example.synth.domain.DeviceType.PARAMETRIC_EQ -> 7
+        com.example.synth.domain.DeviceType.COMPRESSOR -> 8
+        com.example.synth.domain.DeviceType.REVERB -> 9
+        com.example.synth.domain.DeviceType.DELAY -> 10
+        com.example.synth.domain.DeviceType.DISTORTION -> 11
+        com.example.synth.domain.DeviceType.CHORUS -> 12
+        com.example.synth.domain.DeviceType.LIMITER -> 13
+    }
+
+    private fun deviceWireParams(
+        dev: com.example.synth.domain.DeviceModel,
+    ): List<Pair<Int, Float>> =
+        dev.params.map { (name, value) -> WireProtocol.paramKey(name) to value }
 
     private fun wireNotes(
         notes: List<com.example.synth.domain.MidiNote>,

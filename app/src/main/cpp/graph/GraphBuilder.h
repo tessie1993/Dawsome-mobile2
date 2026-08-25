@@ -60,6 +60,7 @@ public:
     uint32_t tempoBuilds() const noexcept { return tempoBuilds_.load(std::memory_order_relaxed); }
     uint32_t graphBuilds() const noexcept { return graphBuilds_.load(std::memory_order_relaxed); }
     uint32_t danglingRefs() const noexcept { return danglingRefs_.load(std::memory_order_relaxed); }
+    uint32_t unregisteredDevices() const noexcept { return unregisteredDevices_.load(std::memory_order_relaxed); }
 
 private:
     void threadMain();
@@ -108,6 +109,7 @@ private:
     std::atomic<uint32_t> tempoBuilds_{0};
     std::atomic<uint32_t> graphBuilds_{0};
     std::atomic<uint32_t> danglingRefs_{0};   // skipped dangling refs (seam-4 skew)
+    std::atomic<uint32_t> unregisteredDevices_{0};   // types whose milestone hasn't landed
 };
 
 } // namespace daw

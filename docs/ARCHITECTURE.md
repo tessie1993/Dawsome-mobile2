@@ -507,6 +507,35 @@ classDiagram
     ProcessContext ..> MidiEventSpan
     VoiceInterface ..> MpeNoteState
 
+    %% ---- M3 device/ (platform core: chains + registry) ----
+    class DeviceChain {
+        <<composite DeviceNode - THE bypass contract lives here: dry path delayed by each device's latencySamples (delay lines kept WARM during active operation so an engage never blends stale history), ~10ms equal-power crossfade (wet = cos, dry = sin of xfade t), device processes exactly while the fade runs then rests; chain latency = sum, bypass-independent. One device.bypass switch param per slot (dense = slot, registered under the DEVICE's uid). Chain state (targets + fade positions) migrates; members migrate as their own entries; configHash covers slot count + uids + latencies>>
+        +addDevice(uid, device, startBypassed) bool
+        +computeConfigHash() uint64_t
+        +process(ctx)
+        +latencySamples() int
+        +setParamImmediate(slot, plain)
+        +saveState(out) / loadState(in)
+    }
+    class DeviceRegistry {
+        <<singleton, non-RT; FROZEN DeviceTypeId wire numbering (0 SubtractiveSynth .. 13 Limiter, append-only - replaces Kotlin ordinals); starts EMPTY, factories register at their milestones (M4+), builder skips + counts unregistered types; registerType runs the seam-6 hostside rule: FNV-1a-32 uniqueness of semantic keys within the type>>
+        +instance() DeviceRegistry
+        +registerType(id, name, factory, params, paramCount) bool
+        +create(typeId) unique_ptr~DeviceNode~
+        +info(typeId) TypeInfo*
+        +keysCollisionFree(params, count) bool
+    }
+    class ParamValueRecord {
+        <<8B wire record: semantic key hash + plain value (DeviceDeltaPayload length-driven params tail - the model residency that lets rebuilds bake device params; param-only refreshes never mark the graph dirty)>>
+    }
+
+    DeviceNode <|-- DeviceChain
+    DeviceChain ..> SmoothedValue
+    DeviceChain ..> DelayLine
+    DeviceRegistry ..> DeviceNode
+    GraphBuilder ..> DeviceRegistry
+    GraphBuilder ..> DeviceChain
+
     %% ---- M2 graph/ (strips + meters) ----
     class TrackStrip {
         <<channel strip AS a DeviceNode (resolver/migration/state uniform): volume (dB->gain at set), constant-power pan (-3dB center, per-channel gain targets), click-free mute; contract keys mixer.volume/pan/mute; gain-domain linear smoothing, current+target migrate (never-jumps); latency 0, configHash 0 (always adoptable); send levels live on SendNodes (M2 f2)>>

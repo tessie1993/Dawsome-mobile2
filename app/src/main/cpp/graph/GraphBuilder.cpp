@@ -5,6 +5,7 @@
 #include <cstring>
 #include <utility>
 
+#include "../device/DeviceRegistry.h"
 #include "../engine/AudioEngine.h"
 
 namespace daw {
@@ -285,17 +286,77 @@ void GraphBuilder::buildGraph() {
         return g->arena.data() + (lane * 2 + size_t(ch)) * size_t(kMaxBlock);
     };
 
-    // Adoption source: the newest previous graph at the same rate.
+    // Adoption source: the newest previous graph at the same rate. The full
+    // seam-3 condition: uid AND configHash AND rate all match.
     const PlaybackGraph* prev =
         graphArtifacts_.empty() ? nullptr : graphArtifacts_.back().graph.get();
-    auto findPrev = [&](NodeUid uid) -> DeviceNode* {
+    auto findPrev = [&](NodeUid uid, uint64_t configHash) -> DeviceNode* {
         if (prev == nullptr || prev->sampleRate != rate) return nullptr;
-        for (const auto& [u, n] : prev->nodeIndex)
-            if (u == uid) return n;
+        for (const auto& e : prev->nodeIndex)
+            if (e.uid == uid && e.configHash == configHash) return e.node;
         return nullptr;
     };
 
-    g->resolver.reserve(regular.size() * 5 + returnRows.size() * 3 + 3);
+    // Resolver sizing: strips + sends + master, plus every registered
+    // device's descriptors and one bypass entry per device.
+    size_t deviceParams = 0;
+    for (const auto& [duid, md] : model_.devices()) {
+        (void)duid;
+        if (const auto* info = DeviceRegistry::instance().info(md.type))
+            deviceParams += size_t(info->paramCount) + 1;
+    }
+    g->resolver.reserve(regular.size() * 5 + returnRows.size() * 3 + 3 + deviceParams);
+
+    // Pre-strip device chain for one lane, compiled from the model.
+    auto makeChain = [&](TrackUnit& u, NodeUid laneUid) {
+        std::vector<std::pair<NodeUid, const ModelDevice*>> devs;
+        for (const auto& [duid, md] : model_.devices())
+            if (md.trackUid == laneUid) devs.emplace_back(duid, &md);
+        if (devs.empty()) return;
+        std::sort(devs.begin(), devs.end(), [](const auto& a, const auto& b) {
+            if (a.second->order != b.second->order) return a.second->order < b.second->order;
+            return a.first < b.first;
+        });
+
+        auto chain = std::make_unique<DeviceChain>();
+        for (const auto& [duid, md] : devs) {
+            auto dev = DeviceRegistry::instance().create(md->type);
+            if (dev == nullptr) {
+                // Type's milestone hasn't landed: skip + count, mixer still works.
+                unregisteredDevices_.fetch_add(1, std::memory_order_relaxed);
+                continue;
+            }
+            // Bake model param values + register descriptors under the
+            // DEVICE's uid (the identity Kotlin addresses).
+            for (int pi = 0; pi < dev->paramCount(); ++pi) {
+                const ParamDescriptor& pd = dev->paramDescriptor(pi);
+                const ParamKeyHash kh = fnv1a32(pd.key);
+                for (const auto& [h, v] : md->params) {
+                    if (h == kh) { dev->setParamImmediate(pi, v); break; }
+                }
+                g->resolver.add(duid, kh, dev.get(), pi);
+            }
+            if (DeviceNode* old = findPrev(duid, 0))
+                g->migration.add(dev.get(), old, dev->stateBytes());
+            g->nodeIndex.push_back({duid, dev.get(), 0});
+            chain->addDevice(duid, dev.get(), !md->enabled);
+            g->nodes.push_back(std::move(dev));
+        }
+        if (chain->slotCount() == 0) return;
+
+        chain->prepare(rate, kMaxBlock);        // prepares members, sizes dry delays
+        const NodeUid cuid = chainNodeUid(laneUid);
+        const uint64_t chash = chain->computeConfigHash();
+        if (DeviceNode* old = findPrev(cuid, chash))
+            g->migration.add(chain.get(), old, chain->stateBytes());
+        for (int slot = 0; slot < chain->slotCount(); ++slot) {
+            g->resolver.add(chain->slotUid(slot), paramKey("device.bypass"),
+                            chain.get(), slot);
+        }
+        g->nodeIndex.push_back({cuid, chain.get(), chash});
+        u.chain = chain.get();
+        g->nodes.push_back(std::move(chain));
+    };
 
     auto makeStrip = [&](TrackUnit& u, NodeUid uid, const ModelTrack* mt,
                          size_t lane, uint8_t wireType) {
@@ -310,12 +371,12 @@ void GraphBuilder::buildGraph() {
             strip->setParamImmediate(2, (mt->flags & kTrackFlagMuted) ? 1.0f : 0.0f);
         }
         strip->prepare(rate, kMaxBlock);            // snaps to the set targets
-        if (DeviceNode* old = findPrev(uid))
+        if (DeviceNode* old = findPrev(uid, 0))
             g->migration.add(strip.get(), old, strip->stateBytes());
         g->resolver.add(uid, paramKey("mixer.volume"), strip.get(), 0);
         g->resolver.add(uid, paramKey("mixer.pan"), strip.get(), 1);
         g->resolver.add(uid, paramKey("mixer.mute"), strip.get(), 2);
-        g->nodeIndex.emplace_back(uid, strip.get());
+        g->nodeIndex.push_back({uid, strip.get(), 0});
         u.strip = strip.get();
         u.meter.prepare(uid, rate);
         g->nodes.push_back(std::move(strip));
@@ -326,6 +387,7 @@ void GraphBuilder::buildGraph() {
     for (const auto& [uid, mt] : regular) {
         TrackUnit u;
         makeStrip(u, uid, mt, lane, mt->type);
+        makeChain(u, uid);
         // Post-fader sends exist only where a target return exists; send
         // values for absent buses stay retained in the ParamMoveTable and
         // apply when a return appears (post-swap reapply).
@@ -335,11 +397,11 @@ void GraphBuilder::buildGraph() {
             const NodeUid suid = sendNodeUid(uid, bus);
             send->setParamImmediate(0, bus == 0 ? mt->sendA : mt->sendB);
             send->prepare(rate, kMaxBlock);
-            if (DeviceNode* old = findPrev(suid))
+            if (DeviceNode* old = findPrev(suid, 0))
                 g->migration.add(send.get(), old, send->stateBytes());
             g->resolver.add(uid, paramKey(bus == 0 ? "mixer.sendA" : "mixer.sendB"),
                             send.get(), 0);
-            g->nodeIndex.emplace_back(suid, send.get());
+            g->nodeIndex.push_back({suid, send.get(), 0});
             (bus == 0 ? u.sendA : u.sendB) = send.get();
             g->nodes.push_back(std::move(send));
         }
@@ -351,26 +413,48 @@ void GraphBuilder::buildGraph() {
     for (const auto& [uid, mt] : returnRows) {
         TrackUnit u;
         makeStrip(u, uid, mt, lane, 3);
+        makeChain(u, uid);
         g->returns.push_back(u);
         ++lane;
     }
 
     makeStrip(g->master, kMasterNodeUid, masterRow, lane, 4);
+    makeChain(g->master, kMasterNodeUid);
     g->mixL = g->master.bufL;
     g->mixR = g->master.bufR;
     g->mainL = g->mixL;
     g->mainR = g->mixR;
     g->cueFolded = true;
 
-    // PDC (blueprint 3.3): balance every join. All M2 nodes report zero
-    // latency, so every comp comes out zero and no DelayCompNode is
-    // inserted - the calculation runs so nonzero latencies (M3 chains, M8
-    // lookahead) just work.
+    // PDC (blueprint 3.3): balance the master join with real chain
+    // latencies. A track's path latency = its chain; a return path's
+    // latency = the slowest sender + the return's own chain (per-send
+    // compensation INTO each return input is deferred until the first
+    // nonzero-latency device lands - M8 lookahead - and is called out in
+    // BUILD_LOG; all values are zero until then).
+    auto laneLatency = [](const TrackUnit& u) {
+        return u.chain != nullptr ? u.chain->latencySamples() : 0;
+    };
+    int maxSender = 0;
+    for (const TrackUnit& t : g->tracks)
+        if (laneLatency(t) > maxSender) maxSender = laneLatency(t);
+
     PdcCalculator pdc;
     pdc.beginJoin();
-    for (const TrackUnit& t : g->tracks) pdc.addPath(t.strip->latencySamples());
-    for (const TrackUnit& r : g->returns) pdc.addPath(r.strip->latencySamples());
-    // maxLatency() == 0 today; comps stay null.
+    for (const TrackUnit& t : g->tracks) pdc.addPath(laneLatency(t));
+    for (const TrackUnit& r : g->returns) pdc.addPath(maxSender + laneLatency(r));
+
+    int pathIndex = 0;
+    auto attachComp = [&](TrackUnit& u) {
+        const int comp = pdc.compFor(pathIndex++);
+        if (comp <= 0) return;
+        auto node = std::make_unique<DelayCompNode>();
+        node->prepare(comp, kMaxBlock);
+        u.comp = node.get();
+        g->comps.push_back(std::move(node));
+    };
+    for (TrackUnit& t : g->tracks) attachComp(t);
+    for (TrackUnit& r : g->returns) attachComp(r);
 
     g->migration.finalize();
 

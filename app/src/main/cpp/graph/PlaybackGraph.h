@@ -8,6 +8,7 @@
 #include "../core/FixedVector.h"
 #include "../core/MeterFrame.h"
 #include "../core/NodeUid.h"
+#include "../device/DeviceChain.h"
 #include "../device/DeviceNode.h"
 #include "DelayComp.h"
 #include "MeterProbe.h"
@@ -47,6 +48,11 @@ inline constexpr NodeUid kMasterNodeUid = makeNodeUid("master", "master");
 // side addresses sends on the TRACK uid and the resolver bridges.
 inline constexpr NodeUid sendNodeUid(NodeUid trackUid, int busIndex) noexcept {
     return trackUid ^ (busIndex == 0 ? 0xA11CE5E17D000001ull : 0xA11CE5E17D000002ull);
+}
+
+// Graph-internal identity for a lane's device chain.
+inline constexpr NodeUid chainNodeUid(NodeUid laneUid) noexcept {
+    return laneUid ^ 0xC4A170DE00000001ull;
 }
 
 // Key -> {node, denseIndex} resolution (CONTRACTS.md seam 6): exists only
@@ -127,6 +133,7 @@ struct TrackUnit {
     uint8_t wireType = 0;             // TrackDeltaPayload numbering
     float* bufL = nullptr;            // arena slices
     float* bufR = nullptr;
+    DeviceChain* chain = nullptr;     // pre-strip device chain (null = none)
     TrackStrip* strip = nullptr;      // owned by PlaybackGraph::nodes
     SendNode* sendA = nullptr;        // regular tracks only; -> returns[0]
     SendNode* sendB = nullptr;        // -> returns[1]
@@ -160,8 +167,14 @@ struct PlaybackGraph {
     ParamResolver resolver;
     MigrationPlan migration;          // consumed once at swap
 
-    // Builder-only: uid -> node index for the NEXT compile's adoption scan.
-    std::vector<std::pair<NodeUid, DeviceNode*>> nodeIndex;
+    // Builder-only: adoption scan data for the NEXT compile. configHash
+    // participates in the seam-3 adopt condition (uid AND hash AND rate).
+    struct NodeIndexEntry {
+        NodeUid uid = 0;
+        DeviceNode* node = nullptr;
+        uint64_t configHash = 0;
+    };
+    std::vector<NodeIndexEntry> nodeIndex;
 
     // Ready meter frames collected during processBlock; the engine drains
     // them into the MeterBus ring (single consumer stays engine-side).

@@ -49,15 +49,16 @@ void PlaybackGraph::processBlock(int numFrames, const RenderFacts& facts) noexce
         zeroBuf(r.bufR, n);
     }
 
-    // Tracks: zeroed buffer = the M2 silence source (instruments write here
-    // from M4, clip players from M5/M6) -> strip -> post-fader send taps ->
-    // comp -> master join.
+    // Tracks: zeroed buffer = the silence source (instruments write here
+    // from M4, clip players from M5/M6) -> device chain -> strip ->
+    // post-fader send taps -> comp -> master join.
     for (TrackUnit& t : tracks) {
         zeroBuf(t.bufL, n);
         zeroBuf(t.bufR, n);
 
         float* bufs[2] = {t.bufL, t.bufR};
         ProcessContext ctx = contextFor(bufs, n, facts);
+        if (t.chain != nullptr) t.chain->process(ctx);
         t.strip->process(ctx);
 
         if (t.sendA != nullptr && !returns.empty()) {
@@ -80,10 +81,11 @@ void PlaybackGraph::processBlock(int numFrames, const RenderFacts& facts) noexce
         mixInto(mixL, mixR, t.bufL, t.bufR, n);
     }
 
-    // Returns: accumulated sends -> strip -> comp -> master join.
+    // Returns: accumulated sends -> device chain -> strip -> comp -> master.
     for (TrackUnit& r : returns) {
         float* bufs[2] = {r.bufL, r.bufR};
         ProcessContext ctx = contextFor(bufs, n, facts);
+        if (r.chain != nullptr) r.chain->process(ctx);
         r.strip->process(ctx);
 
         MeterFrame mf;
@@ -93,10 +95,11 @@ void PlaybackGraph::processBlock(int numFrames, const RenderFacts& facts) noexce
         mixInto(mixL, mixR, r.bufL, r.bufR, n);
     }
 
-    // Master: strip in place on the mix, meter, hand to the Main bus.
+    // Master: mastering chain -> strip in place on the mix -> Main bus.
     {
         float* bufs[2] = {master.bufL, master.bufR};
         ProcessContext ctx = contextFor(bufs, n, facts);
+        if (master.chain != nullptr) master.chain->process(ctx);
         master.strip->process(ctx);
 
         MeterFrame mf;

@@ -6,6 +6,38 @@ Newest entry first. Each entry: where the build stands, what comes next.
 
 ---
 
+## 2026-08-25 — M3 feature 1 done: DeviceChain + DeviceRegistry + param residency
+
+- `device/DeviceChain.h`: composite DeviceNode owning THE bypass contract -
+  dry path delayed by device latency (delay lines kept WARM while active so
+  an engage never crossfades stale history - self-caught, as was a wet/dry
+  polarity inversion in the equal-power call), ~10ms fade = the device's
+  post-bypass processing window, chain latency bypass-independent; one
+  device.bypass switch per slot resolved under the device's uid; chain state
+  migrates, configHash covers count+uids+latencies.
+- `device/DeviceRegistry.h`: frozen DeviceTypeId wire numbering (append-only,
+  replaces Kotlin ordinals), empty-until-milestones factory table (builder
+  skips + counts unregistered types), hostside seam-6 key-collision assert.
+- Device param residency (closes the M2 TODO): DeviceDeltaPayload grows a
+  length-driven ParamValueRecord tail (backward-readable); ModelDevice
+  stores params; the builder bakes them through descriptor lookup at
+  compile. Param-only device deltas do NOT mark the graph dirty (knob moves
+  ride the param path; residency updates silently) - only structural device
+  facts rebuild.
+- Graph integration: chains compile per lane (tracks/returns/master) from
+  ordered model devices, run pre-strip; adoption is now configHash-aware
+  (NodeIndexEntry {uid, node, hash}); PDC materializes DelayCompNodes from
+  real chain latencies at the master join (per-send comps into return
+  inputs deferred to the first nonzero-latency device, M8 - documented).
+- Kotlin: DeltaEncoder device params tail, EngineSync frozen deviceTypeWire
+  map, SetDeviceParam -> param + single-device residency delta,
+  ToggleDeviceEnabled -> live device.bypass param + canonical delta.
+- Map: 158 classes, sweep green.
+
+**Next: M3 feature 2** — VoiceAllocator + VoiceBudgetLedger (global budget,
+steal order releasing -> oldest -> quietest, protect recent + drum
+transients). Then f3: racks/macros/mod core + QualityMode + presets.
+
 ## 2026-08-25 — M2 COMPLETE (feature 3: RT swap + live mixer loop)
 
 The graph-and-mixer milestone closes. AudioEngine's render now runs the
